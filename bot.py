@@ -1,8 +1,7 @@
 import os
 import logging
 import asyncio
-import random
-from datetime import datetime
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ParseMode
@@ -18,16 +17,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Инициализация бота и базы данных
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен для @cvetnik_poster_bot
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
 db = Database()
 
 # Настройка Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-pro')
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-pro')
+else:
+    logger.warning("GEMINI_API_KEY не задан, AI-генерация работать не будет")
+    model = None
 
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
+
+# --- ВЕБ-СЕРВЕР ДЛЯ ПИНГА (ЧТОБЫ RENDER НЕ УСЫПЛЯЛ) ---
+async def handle_ping(request):
+    """Обработчик для пинг-запросов от UptimeRobot"""
+    return web.Response(text='OK')
+
+async def run_web_server():
+    """Запуск простого веб-сервера для пинга"""
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    app.router.add_get('/ping', handle_ping)
+    app.router.add_get('/health', handle_ping)
+    
+    port = int(os.environ.get('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"✅ Пинг-сервер запущен на порту {port}")
 
 # Проверка прав администратора
 def is_admin(user_id):
@@ -56,7 +80,8 @@ async def cmd_stats(message: types.Message):
         f"📊 **Статистика**\n\n"
         f"📸 Всего фото: {stats['total']}\n"
         f"✅ Опубликовано: {stats['posted']}\n"
-        f"⏳ В очереди: {stats['pending']}"
+        f"⏳ В очереди: {stats['pending']}",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 @dp.message_handler(content_types=['photo'])
@@ -79,6 +104,9 @@ async def handle_photo(message: types.Message):
 
 async def generate_post_text():
     """Генерация текста поста через Gemini"""
+    if not model:
+        return get_default_post_text()
+    
     prompt = """Напиши красивый пост для Telegram канала цветочного магазина о букете на фото.
 Используй тёплый, вдохновляющий, немного поэтичный стиль.
 Опиши, какие могут быть чувства у получателя, для какого повода подойдёт.
@@ -103,19 +131,22 @@ async def generate_post_text():
         return response.text
     except Exception as e:
         logger.error(f"Ошибка генерации текста: {e}")
-        # Запасной вариант, если AI не сработает
-        return (
-            "🌸 Прекрасный букет для особенного момента!\n\n"
-            "Пусть цветы скажут всё, что вы чувствуете 💐\n\n"
-            "Цветник 🌸 | Новосибирск\n"
-            "Свежие цветы и букеты с доставкой 💐\n"
-            "Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-            "Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-            "⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-            "📍 2-я Марата, 22 — @cvetnik_sib\n"
-            "📍 Некрасова, 41 — @cvetnik1_sib\n"
-            "📍 Связистов, 113А — @cvetniksvezistrov"
-        )
+        return get_default_post_text()
+
+def get_default_post_text():
+    """Запасной текст, если AI не сработает"""
+    return (
+        "🌸 Прекрасный букет для особенного момента!\n\n"
+        "Пусть цветы скажут всё, что вы чувствуете 💐\n\n"
+        "Цветник 🌸 | Новосибирск\n"
+        "Свежие цветы и букеты с доставкой 💐\n"
+        "Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
+        "Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
+        "⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
+        "📍 2-я Марата, 22 — @cvetnik_sib\n"
+        "📍 Некрасова, 41 — @cvetnik1_sib\n"
+        "📍 Связистов, 113А — @cvetniksvezistrov"
+    )
 
 async def post_random_photo():
     """Публикация случайного фото из базы"""
@@ -123,29 +154,34 @@ async def post_random_photo():
     if not photo:
         # Уведомляем админов, что фото кончились
         for admin_id in ADMIN_IDS:
-            await bot.send_message(
-                admin_id,
-                "⚠️ Внимание! Все фото уже опубликованы.\n"
-                "Пожалуйста, добавьте новые фото в бота."
-            )
+            try:
+                await bot.send_message(
+                    admin_id,
+                    "⚠️ Внимание! Все фото уже опубликованы.\n"
+                    "Пожалуйста, добавьте новые фото в бота."
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
         return
     
     # Генерируем текст поста
     post_text = await generate_post_text()
     
     # Публикуем в канал
-    with open(photo['file_path'], 'rb') as photo_file:
-        await bot.send_photo(
-            chat_id=CHANNEL_ID,
-            photo=photo_file,
-            caption=post_text,
-            parse_mode=ParseMode.HTML
-        )
-    
-    # Отмечаем фото как опубликованное
-    db.mark_as_posted(photo['id'])
-    
-    logger.info(f"Пост опубликован. Осталось фото: {db.get_pending_count()}")
+    try:
+        with open(photo['file_path'], 'rb') as photo_file:
+            await bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=photo_file,
+                caption=post_text,
+                parse_mode=ParseMode.HTML
+            )
+        
+        # Отмечаем фото как опубликованное
+        db.mark_as_posted(photo['id'])
+        logger.info(f"✅ Пост опубликован. Осталось фото: {db.get_pending_count()}")
+    except Exception as e:
+        logger.error(f"Ошибка при публикации: {e}")
 
 async def setup_scheduler():
     """Настройка планировщика"""
@@ -153,30 +189,36 @@ async def setup_scheduler():
     
     # Разбираем время из POST_TIMES
     for time_str in POST_TIMES:
-        hour, minute = map(int, time_str.split(':'))
-        # Переводим в UTC (Новосибирск UTC+7)
-        utc_hour = hour - 7
-        if utc_hour < 0:
-            utc_hour += 24
-            
-        scheduler.add_job(
-            post_random_photo,
-            trigger=CronTrigger(hour=utc_hour, minute=minute)
-        )
-        logger.info(f"Запланирован пост на {hour:02d}:{minute:02d} MSK (UTC {utc_hour:02d}:{minute:02d})")
+        try:
+            hour, minute = map(int, time_str.split(':'))
+            # Переводим в UTC (Новосибирск UTC+7)
+            utc_hour = hour - 7
+            if utc_hour < 0:
+                utc_hour += 24
+                
+            scheduler.add_job(
+                post_random_photo,
+                trigger=CronTrigger(hour=utc_hour, minute=minute)
+            )
+            logger.info(f"📅 Запланирован пост на {hour:02d}:{minute:02d} MSK (UTC {utc_hour:02d}:{minute:02d})")
+        except Exception as e:
+            logger.error(f"Ошибка в настройке времени {time_str}: {e}")
     
     scheduler.start()
-    logger.info("Планировщик запущен")
+    logger.info("✅ Планировщик запущен")
 
 async def on_startup(dp):
     """Действия при запуске бота"""
+    # Запускаем веб-сервер для пинга
+    asyncio.create_task(run_web_server())
+    # Запускаем планировщик
     await setup_scheduler()
-    logger.info("Бот запущен")
+    logger.info("🚀 Бот-постер запущен")
 
 async def on_shutdown(dp):
     """Действия при остановке бота"""
     db.close()
-    logger.info("Бот остановлен")
+    logger.info("👋 Бот-постер остановлен")
 
 if __name__ == '__main__':
     from aiogram import executor
