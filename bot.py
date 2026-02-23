@@ -1,6 +1,9 @@
 import os
+import sys
 import logging
 import asyncio
+import atexit
+import signal
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
@@ -11,6 +14,17 @@ import google.generativeai as genai
 
 from config import ADMIN_IDS, POST_TIMES
 from database import Database
+
+# Принудительная очистка старых процессов
+def cleanup():
+    print("🧹 Очистка старых процессов...")
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except:
+        pass
+
+atexit.register(cleanup)
+signal.signal(signal.SIGTERM, lambda sig, frame: sys.exit(0))
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
