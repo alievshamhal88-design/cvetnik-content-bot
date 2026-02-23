@@ -17,7 +17,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Инициализация бота и базы данных
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен для @cvetnik_poster_bot
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    logger.error("❌ BOT_TOKEN не найден в переменных окружения!")
+    exit(1)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
@@ -28,11 +32,13 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-pro')
+    logger.info("✅ Gemini AI настроен")
 else:
-    logger.warning("GEMINI_API_KEY не задан, AI-генерация работать не будет")
+    logger.warning("⚠️ GEMINI_API_KEY не задан, AI-генерация работать не будет")
     model = None
 
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
+logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
 
 # --- ВЕБ-СЕРВЕР ДЛЯ ПИНГА (ЧТОБЫ RENDER НЕ УСЫПЛЯЛ) ---
 async def handle_ping(request):
@@ -59,7 +65,11 @@ def is_admin(user_id):
 
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    if not is_admin(message.from_user.id):
+    user_id = message.from_user.id
+    logger.info(f"🖥️ Команда /start от пользователя {user_id}")
+    
+    if not is_admin(user_id):
+        logger.warning(f"⛔️ Доступ запрещён для {user_id}")
         await message.reply("⛔️ У вас нет доступа к этому боту.")
         return
     
@@ -72,7 +82,11 @@ async def cmd_start(message: types.Message):
 
 @dp.message_handler(commands=['stats'])
 async def cmd_stats(message: types.Message):
-    if not is_admin(message.from_user.id):
+    user_id = message.from_user.id
+    logger.info(f"📊 Команда /stats от пользователя {user_id}")
+    
+    if not is_admin(user_id):
+        logger.warning(f"⛔️ Доступ запрещён для {user_id}")
         return
     
     stats = db.get_stats()
@@ -86,21 +100,38 @@ async def cmd_stats(message: types.Message):
 
 @dp.message_handler(content_types=['photo'])
 async def handle_photo(message: types.Message):
-    if not is_admin(message.from_user.id):
+    user_id = message.from_user.id
+    logger.info(f"📸 Получено фото от пользователя {user_id}")
+    
+    # Проверка прав администратора
+    if not is_admin(user_id):
+        logger.warning(f"⛔️ Пользователь {user_id} не админ, фото не сохранено")
+        await message.reply("⛔️ У вас нет доступа к этому боту.")
         return
     
-    photo = message.photo[-1]
-    file_id = photo.file_id
-    
-    # Сохраняем фото
-    file_info = await bot.get_file(file_id)
-    file_path = f"data/photos/{file_id}.jpg"
-    await bot.download_file(file_info.file_path, file_path)
-    
-    # Сохраняем в базу
-    db.add_photo(file_id, file_path)
-    
-    await message.reply("✅ Фото добавлено в очередь на публикацию!")
+    try:
+        # Получаем фото
+        photo = message.photo[-1]
+        file_id = photo.file_id
+        logger.info(f"🆔 File_id: {file_id}")
+        
+        # Сохраняем фото
+        file_info = await bot.get_file(file_id)
+        file_path = f"data/photos/{file_id}.jpg"
+        await bot.download_file(file_info.file_path, file_path)
+        logger.info(f"💾 Фото сохранено: {file_path}")
+        
+        # Сохраняем в базу
+        success = db.add_photo(file_id, file_path)
+        
+        if success:
+            await message.reply("✅ Фото добавлено в очередь на публикацию!")
+        else:
+            await message.reply("❌ Ошибка при сохранении фото в базу данных")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обработке фото: {e}")
+        await message.reply(f"❌ Произошла ошибка: {e}")
 
 async def generate_post_text():
     """Генерация текста поста через Gemini"""
@@ -130,7 +161,7 @@ async def generate_post_text():
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        logger.error(f"Ошибка генерации текста: {e}")
+        logger.error(f"❌ Ошибка генерации текста: {e}")
         return get_default_post_text()
 
 def get_default_post_text():
@@ -150,8 +181,11 @@ def get_default_post_text():
 
 async def post_random_photo():
     """Публикация случайного фото из базы"""
+    logger.info("⏰ Запуск публикации по расписанию")
+    
     photo = db.get_random_unposted_photo()
     if not photo:
+        logger.warning("⚠️ Нет фото для публикации")
         # Уведомляем админов, что фото кончились
         for admin_id in ADMIN_IDS:
             try:
@@ -161,8 +195,10 @@ async def post_random_photo():
                     "Пожалуйста, добавьте новые фото в бота."
                 )
             except Exception as e:
-                logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+                logger.error(f"❌ Не удалось отправить уведомление админу {admin_id}: {e}")
         return
+    
+    logger.info(f"🖼️ Выбрано фото для публикации: {photo['file_id']}")
     
     # Генерируем текст поста
     post_text = await generate_post_text()
@@ -181,7 +217,7 @@ async def post_random_photo():
         db.mark_as_posted(photo['id'])
         logger.info(f"✅ Пост опубликован. Осталось фото: {db.get_pending_count()}")
     except Exception as e:
-        logger.error(f"Ошибка при публикации: {e}")
+        logger.error(f"❌ Ошибка при публикации: {e}")
 
 async def setup_scheduler():
     """Настройка планировщика"""
@@ -202,13 +238,14 @@ async def setup_scheduler():
             )
             logger.info(f"📅 Запланирован пост на {hour:02d}:{minute:02d} MSK (UTC {utc_hour:02d}:{minute:02d})")
         except Exception as e:
-            logger.error(f"Ошибка в настройке времени {time_str}: {e}")
+            logger.error(f"❌ Ошибка в настройке времени {time_str}: {e}")
     
     scheduler.start()
     logger.info("✅ Планировщик запущен")
 
 async def on_startup(dp):
     """Действия при запуске бота"""
+    logger.info("🚀 Бот запускается...")
     # Запускаем веб-сервер для пинга
     asyncio.create_task(run_web_server())
     # Запускаем планировщик
