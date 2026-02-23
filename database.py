@@ -1,10 +1,12 @@
 import sqlite3
 import os
+from datetime import datetime
 
 class Database:
     def __init__(self, db_path='data/database.sqlite'):
         # Создаем папку data, если её нет
         os.makedirs('data/photos', exist_ok=True)
+        print(f"✅ Папка data/photos создана или уже существует")
         
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
@@ -22,13 +24,20 @@ class Database:
             )
         ''')
         self.conn.commit()
+        print("✅ Таблица photos создана или уже существует")
     
     def add_photo(self, file_id, file_path):
-        self.cursor.execute(
-            'INSERT OR IGNORE INTO photos (file_id, file_path) VALUES (?, ?)',
-            (file_id, file_path)
-        )
-        self.conn.commit()
+        try:
+            self.cursor.execute(
+                'INSERT OR IGNORE INTO photos (file_id, file_path) VALUES (?, ?)',
+                (file_id, file_path)
+            )
+            self.conn.commit()
+            print(f"✅ Фото {file_id} добавлено в базу")
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка добавления фото: {e}")
+            return False
     
     def get_random_unposted_photo(self):
         self.cursor.execute(
@@ -45,6 +54,7 @@ class Database:
             (photo_id,)
         )
         self.conn.commit()
+        print(f"✅ Фото {photo_id} отмечено как опубликованное")
     
     def get_stats(self):
         self.cursor.execute('SELECT COUNT(*) FROM photos')
