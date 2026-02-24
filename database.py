@@ -1,6 +1,8 @@
 import sqlite3
 import os
-from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, db_path='data/database.sqlite'):
@@ -70,6 +72,12 @@ class Database:
     def get_pending_count(self):
         self.cursor.execute('SELECT COUNT(*) FROM photos WHERE posted = 0')
         return self.cursor.fetchone()[0]
+    
+    def reset_all_photos(self):
+        """Сбрасывает статус всех фото (posted = 0) для нового круга публикаций"""
+        self.cursor.execute('UPDATE photos SET posted = 0')
+        self.conn.commit()
+        logger.info("🔄 Все фото сброшены для нового круга публикаций")
     
     def close(self):
         self.conn.close()
