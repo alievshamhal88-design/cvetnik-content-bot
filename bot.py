@@ -5,34 +5,27 @@ import asyncio
 import datetime
 import signal
 import atexit
-import random
 from io import BytesIO
-from PIL import Image
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ParseMode, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-import google.generativeai as genai
 
-from config import ADMIN_IDS, POST_TIMES, GEMINI_MODELS
+from config import ADMIN_IDS, POST_TIMES, YANDEX_FOLDER_ID, YANDEX_API_KEY
 from database import Database
+from yandex_client import YandexGPTClient
 
 # ============================================
 # НАСТРОЙКИ
 # ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
 
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не найден в переменных окружения!")
     exit(1)
-
-if not GEMINI_API_KEY:
-    logger.warning("⚠️ GEMINI_API_KEY не задан, AI-генерация работать не будет")
-else:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 # ============================================
 # ЛОГИРОВАНИЕ
@@ -48,101 +41,15 @@ dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
 db = Database()
 
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
-logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
+# Инициализация YandexGPT
+try:
+    yandex_gpt = YandexGPTClient()
+    logger.info("✅ YandexGPT клиент создан для постера")
+except ValueError as e:
+    logger.error(f"❌ Ошибка создания YandexGPT клиента: {e}")
+    yandex_gpt = None
 
-# ============================================
-# ФУНКЦИИ ДЛЯ GEMINI
-# ============================================
-async def generate_post_with_ai(photo_file_id):
-    """
-    Gemini смотрит на фото и генерирует название + описание для поста
-    """
-    
-    # Запасной текст
-    def get_fallback_text():
-        now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
-        return (
-            f"🌸 Пост от {now}\n\n"
-            f"(Сгенерировано вручную, AI временно недоступен)\n\n"
-            f"Цветник 🌸 | Новосибирск\n"
-            f"Свежие цветы и букеты с доставкой 💐\n"
-            f"Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-            f"Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-            f"⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-            f"📍 2-я Марата, 22 — @cvetnik_sib\n"
-            f"📍 Некрасова, 41 — @cvetnik1_sib\n"
-            f"📍 Связистов, 113А — @cvetniksvezistrov"
-        )
-    
-    if not GEMINI_API_KEY or not photo_file_id:
-        return get_fallback_text()
-    
-    try:
-        # Скачиваем фото
-        file_info = await bot.get_file(photo_file_id)
-        file_bytes = await bot.download_file(file_info.file_path)
-        
-        # Открываем изображение
-        image = Image.open(BytesIO(file_bytes.read()))
-        
-        # Промпт для Gemini
-        prompt = (
-            "Посмотри на это фото букета цветов. Напиши для него:\n\n"
-            "1. КРАСИВОЕ НАЗВАНИЕ (2-4 слова, поэтичное, на русском)\n"
-            "2. КОРОТКОЕ ОПИСАНИЕ (2-3 предложения о букете: какие цветы, "
-            "какое настроение, для какого повода подойдёт)\n\n"
-            "Формат ответа (строго соблюдай):\n"
-            "Название: ...\n"
-            "Описание: ..."
-        )
-        
-        # Пробуем разные модели
-        result = None
-        for model_name in GEMINI_MODELS:
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content([prompt, image])
-                if response and response.text:
-                    result = response.text
-                    logger.info(f"✅ Gemini {model_name} сгенерировал текст")
-                    break
-            except Exception as e:
-                logger.warning(f"⚠️ Модель {model_name} не сработала: {e}")
-                continue
-        
-        if result:
-            # Парсим ответ
-            lines = result.split('\n')
-            name = "Волшебный букет"
-            description = "Нежный букет для особенного случая."
-            
-            for line in lines:
-                if line.startswith('Название:'):
-                    name = line.replace('Название:', '').strip()
-                elif line.startswith('Описание:'):
-                    description = line.replace('Описание:', '').strip()
-            
-            # Формируем полный текст поста
-            post_text = (
-                f"🌸 **{name}** 🌸\n\n"
-                f"{description}\n\n"
-                f"Цветник 🌸 | Новосибирск\n"
-                f"Свежие цветы и букеты с доставкой 💐\n"
-                f"Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-                f"Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-                f"⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-                f"📍 2-я Марата, 22 — @cvetnik_sib\n"
-                f"📍 Некрасова, 41 — @cvetnik1_sib\n"
-                f"📍 Связистов, 113А — @cvetniksvezistrov"
-            )
-            
-            return post_text
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка Gemini: {e}")
-    
-    return get_fallback_text()
+logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
 
 # ============================================
 # ПИНГ-СЕРВЕР
@@ -185,7 +92,7 @@ async def cmd_start(message: types.Message):
     await message.reply(
         "🌸 Привет! Я бот для автоматического постинга в канал.\n\n"
         "📸 Просто отправляйте мне фото, и я буду их публиковать по расписанию.\n"
-        "Каждый пост будет содержать описание от ИИ и ваши контакты.\n\n"
+        "Каждый пост будет содержать название и описание от YandexGPT.\n\n"
         "Используйте /stats чтобы увидеть статистику.\n"
         "Используйте /reset чтобы сбросить статусы всех фото."
     )
@@ -257,7 +164,7 @@ async def handle_photo(message: types.Message):
         if success:
             await message.reply("✅ Фото добавлено в очередь на публикацию!")
         else:
-            await message.reply("❌ Ошибка при сохранении фото в базу данных")
+            await message.reply("❌ Ошибка при сохранении фото в базу danych")
             
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке фото: {e}")
@@ -302,7 +209,24 @@ async def post_random_photo():
     logger.info(f"🖼️ Выбрано фото для публикации: {photo['file_id']}")
     
     # Генерируем текст поста через AI
-    post_text = await generate_post_with_ai(photo['file_id'])
+    if yandex_gpt:
+        post_text = yandex_gpt.generate_post_text()
+    else:
+        # Запасной вариант, если AI недоступен
+        now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+        post_text = f"🌸 Пост от {now}\n\n(Сгенерировано вручную, AI временно недоступен)"
+    
+    # Добавляем стандартные контакты
+    post_text += (
+        "\n\nЦветник 🌸 | Новосибирск\n"
+        "Свежие цветы и букеты с доставкой 💐\n"
+        "Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
+        "Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
+        "⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
+        "📍 2-я Марата, 22 — @cvetnik_sib\n"
+        "📍 Некрасова, 41 — @cvetnik1_sib\n"
+        "📍 Связистов, 113А — @cvetniksvezistrov"
+    )
     
     # Публикуем в канал
     try:
