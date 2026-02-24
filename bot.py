@@ -5,55 +5,148 @@ import asyncio
 import datetime
 import signal
 import atexit
+import random
+from io import BytesIO
+from PIL import Image
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
-from aiogram.types import ParseMode
+from aiogram.types import ParseMode, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import google.generativeai as genai
 
-from config import ADMIN_IDS, POST_TIMES
+from config import ADMIN_IDS, POST_TIMES, GEMINI_MODELS
 from database import Database
 
-# Принудительная очистка старых процессов
-def cleanup():
-    print("🧹 Очистка старых процессов...")
-    try:
-        os.kill(os.getpid(), signal.SIGTERM)
-    except:
-        pass
-
-atexit.register(cleanup)
-signal.signal(signal.SIGTERM, lambda sig, frame: sys.exit(0))
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Инициализация бота и базы данных
+# ============================================
+# НАСТРОЙКИ
+# ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 if not BOT_TOKEN:
     logger.error("❌ BOT_TOKEN не найден в переменных окружения!")
     exit(1)
 
+if not GEMINI_API_KEY:
+    logger.warning("⚠️ GEMINI_API_KEY не задан, AI-генерация работать не будет")
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# ============================================
+# ЛОГИРОВАНИЕ
+# ============================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ============================================
+# ИНИЦИАЛИЗАЦИЯ
+# ============================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
 db = Database()
 
-# Настройка Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("✅ Gemini AI настроен")
-else:
-    logger.warning("⚠️ GEMINI_API_KEY не задан, AI-генерация работать не будет")
-
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
 logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
 
-# --- ВЕБ-СЕРВЕР ДЛЯ ПИНГА ---
+# ============================================
+# ФУНКЦИИ ДЛЯ GEMINI
+# ============================================
+async def generate_post_with_ai(photo_file_id):
+    """
+    Gemini смотрит на фото и генерирует название + описание для поста
+    """
+    
+    # Запасной текст
+    def get_fallback_text():
+        now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+        return (
+            f"🌸 Пост от {now}\n\n"
+            f"(Сгенерировано вручную, AI временно недоступен)\n\n"
+            f"Цветник 🌸 | Новосибирск\n"
+            f"Свежие цветы и букеты с доставкой 💐\n"
+            f"Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
+            f"Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
+            f"⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
+            f"📍 2-я Марата, 22 — @cvetnik_sib\n"
+            f"📍 Некрасова, 41 — @cvetnik1_sib\n"
+            f"📍 Связистов, 113А — @cvetniksvezistrov"
+        )
+    
+    if not GEMINI_API_KEY or not photo_file_id:
+        return get_fallback_text()
+    
+    try:
+        # Скачиваем фото
+        file_info = await bot.get_file(photo_file_id)
+        file_bytes = await bot.download_file(file_info.file_path)
+        
+        # Открываем изображение
+        image = Image.open(BytesIO(file_bytes.read()))
+        
+        # Промпт для Gemini
+        prompt = (
+            "Посмотри на это фото букета цветов. Напиши для него:\n\n"
+            "1. КРАСИВОЕ НАЗВАНИЕ (2-4 слова, поэтичное, на русском)\n"
+            "2. КОРОТКОЕ ОПИСАНИЕ (2-3 предложения о букете: какие цветы, "
+            "какое настроение, для какого повода подойдёт)\n\n"
+            "Формат ответа (строго соблюдай):\n"
+            "Название: ...\n"
+            "Описание: ..."
+        )
+        
+        # Пробуем разные модели
+        result = None
+        for model_name in GEMINI_MODELS:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([prompt, image])
+                if response and response.text:
+                    result = response.text
+                    logger.info(f"✅ Gemini {model_name} сгенерировал текст")
+                    break
+            except Exception as e:
+                logger.warning(f"⚠️ Модель {model_name} не сработала: {e}")
+                continue
+        
+        if result:
+            # Парсим ответ
+            lines = result.split('\n')
+            name = "Волшебный букет"
+            description = "Нежный букет для особенного случая."
+            
+            for line in lines:
+                if line.startswith('Название:'):
+                    name = line.replace('Название:', '').strip()
+                elif line.startswith('Описание:'):
+                    description = line.replace('Описание:', '').strip()
+            
+            # Формируем полный текст поста
+            post_text = (
+                f"🌸 **{name}** 🌸\n\n"
+                f"{description}\n\n"
+                f"Цветник 🌸 | Новосибирск\n"
+                f"Свежие цветы и букеты с доставкой 💐\n"
+                f"Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
+                f"Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
+                f"⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
+                f"📍 2-я Марата, 22 — @cvetnik_sib\n"
+                f"📍 Некрасова, 41 — @cvetnik1_sib\n"
+                f"📍 Связистов, 113А — @cvetniksvezistrov"
+            )
+            
+            return post_text
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка Gemini: {e}")
+    
+    return get_fallback_text()
+
+# ============================================
+# ПИНГ-СЕРВЕР
+# ============================================
 async def handle_ping(request):
     return web.Response(text='OK')
 
@@ -70,10 +163,15 @@ async def run_web_server():
     await site.start()
     logger.info(f"✅ Пинг-сервер запущен на порту {port}")
 
-# Проверка прав администратора
+# ============================================
+# ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА
+# ============================================
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+# ============================================
+# ОБРАБОТЧИКИ КОМАНД
+# ============================================
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -110,7 +208,6 @@ async def cmd_stats(message: types.Message):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# ---------- НОВАЯ КОМАНДА ДЛЯ СБРОСА ФОТО ----------
 @dp.message_handler(commands=['reset'])
 async def cmd_reset(message: types.Message):
     user_id = message.from_user.id
@@ -121,7 +218,6 @@ async def cmd_reset(message: types.Message):
         await message.reply("⛔️ Нет доступа")
         return
     
-    # Сбрасываем статусы всех фото
     db.reset_all_photos()
     stats = db.get_stats()
     
@@ -133,6 +229,9 @@ async def cmd_reset(message: types.Message):
         parse_mode='Markdown'
     )
 
+# ============================================
+# ОБРАБОТКА ФОТО
+# ============================================
 @dp.message_handler(content_types=['photo'])
 async def handle_photo(message: types.Message):
     user_id = message.from_user.id
@@ -164,105 +263,11 @@ async def handle_photo(message: types.Message):
         logger.error(f"❌ Ошибка при обработке фото: {e}")
         await message.reply(f"❌ Произошла ошибка: {e}")
 
-# ---------- ГЕНЕРАЦИЯ ТЕКСТА С FALLBACK ----------
-async def generate_post_text():
-    """Генерация текста поста с fallback на несколько моделей Gemini"""
-    
-    models_to_try = [
-        'gemini-2.5-flash',
-        'gemini-2.5-pro',
-        'gemini-3.0-flash-preview',
-        'gemini-3.1-pro-preview'
-    ]
-    
-    prompt = """Напиши красивый пост для Telegram канала цветочного магазина о букете на фото.
-Используй тёплый, вдохновляющий, немного поэтичный стиль.
-Опиши, какие могут быть чувства у получателя, для какого повода подойдёт.
-В конце обязательно добавь этот блок (скопируй точно):
-
-Цветник 🌸 | Новосибирск
-Свежие цветы и букеты с доставкой 💐
-Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)
-
-Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)
-⚡️ Быстрый заказ 👉 @cvetniknsk_bot
-
-📍 2-я Марата, 22 — @cvetnik_sib
-📍 Некрасова, 41 — @cvetnik1_sib
-📍 Связистов, 113А — @cvetniksvezistrov
-
-Пост должен быть на русском, длиной 300-500 символов (без учёта блока в конце)."""
-    
-    if not GEMINI_API_KEY:
-        logger.warning("⚠️ Нет ключа Gemini, использую запасной текст")
-        return get_default_post_text(datetime=True)
-    
-    last_error = None
-    used_models = []
-    
-    for model_name in models_to_try:
-        try:
-            logger.info(f"🚀 Пробую модель: {model_name}")
-            used_models.append(model_name)
-            
-            current_model = genai.GenerativeModel(model_name)
-            await asyncio.sleep(1)
-            
-            response = current_model.generate_content(prompt)
-            
-            if response and response.text:
-                logger.info(f"✅ Успех с моделью: {model_name}")
-                return response.text
-            else:
-                logger.warning(f"⚠️ Пустой ответ от {model_name}")
-                continue
-                
-        except Exception as e:
-            error_str = str(e)
-            logger.warning(f"❌ Ошибка с моделью {model_name}: {error_str[:200]}")
-            last_error = e
-            
-            if "429" in error_str or "quota" in error_str.lower():
-                logger.info("⏳ Обнаружена ошибка квоты, жду 5 секунд...")
-                await asyncio.sleep(5)
-                continue
-    
-    logger.error(f"❌ Все модели не сработали. Последняя ошибка: {last_error}")
-    return get_default_post_text(datetime=True)
-
-def get_default_post_text(datetime=False):
-    """Запасной текст, если AI не сработает"""
-    if datetime:
-        now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
-        return (
-            f"🌸 Пост от {now}\n\n"
-            f"(Сгенерировано вручную, AI временно недоступен)\n\n"
-            f"Цветник 🌸 | Новосибирск\n"
-            f"Свежие цветы и букеты с доставкой 💐\n"
-            f"Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-            f"Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-            f"⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-            f"📍 2-я Марата, 22 — @cvetnik_sib\n"
-            f"📍 Некрасова, 41 — @cvetnik1_sib\n"
-            f"📍 Связистов, 113А — @cvetniksvezistrov"
-        )
-    else:
-        return (
-            "🌸 Прекрасный букет для особенного момента!\n\n"
-            "Пусть цветы скажут всё, что вы чувствуете 💐\n\n"
-            "Цветник 🌸 | Новосибирск\n"
-            "Свежие цветы и букеты с доставкой 💐\n"
-            "Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-            "Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-            "⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-            "📍 2-я Марата, 22 — @cvetnik_sib\n"
-            "📍 Некрасова, 41 — @cvetnik1_sib\n"
-            "📍 Связистов, 113А — @cvetniksvezistrov"
-        )
-
-# ---------- ОБНОВЛЕННАЯ ФУНКЦИЯ ПУБЛИКАЦИИ С ОБНУЛЕНИЕМ ----------
+# ============================================
+# ПУБЛИКАЦИЯ ПОСТА
+# ============================================
 async def post_random_photo():
-    """Публикация случайного фото из базы с автоматическим обнулением"""
+    """Публикация случайного фото с AI-генерацией текста"""
     logger.info("⏰ Запуск публикации по расписанию")
     
     photo = db.get_random_unposted_photo()
@@ -270,15 +275,11 @@ async def post_random_photo():
     # Если фото нет, обнуляем все и берем любое
     if not photo:
         logger.warning("⚠️ Все фото опубликованы, обнуляю статистику...")
-        
-        # Подсчитываем, сколько всего было фото
         stats = db.get_stats()
         total_photos = stats['total']
         
-        # Обнуляем все фото (устанавливаем posted = 0 для всех)
         db.reset_all_photos()
         
-        # Отправляем уведомление админам
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(
@@ -292,7 +293,6 @@ async def post_random_photo():
             except Exception as e:
                 logger.error(f"❌ Не удалось отправить уведомление админу {admin_id}: {e}")
         
-        # Берем любое фото (теперь все снова доступны)
         photo = db.get_random_unposted_photo()
         
         if not photo:
@@ -301,8 +301,8 @@ async def post_random_photo():
     
     logger.info(f"🖼️ Выбрано фото для публикации: {photo['file_id']}")
     
-    # Генерируем текст поста
-    post_text = await generate_post_text()
+    # Генерируем текст поста через AI
+    post_text = await generate_post_with_ai(photo['file_id'])
     
     # Публикуем в канал
     try:
@@ -314,13 +314,16 @@ async def post_random_photo():
                 parse_mode=ParseMode.HTML
             )
         
-        # Отмечаем фото как опубликованное
         db.mark_as_posted(photo['id'])
         stats = db.get_stats()
         logger.info(f"✅ Пост опубликован. Осталось фото: {stats['pending']}")
+        
     except Exception as e:
         logger.error(f"❌ Ошибка при публикации: {e}")
 
+# ============================================
+# ПЛАНИРОВЩИК
+# ============================================
 async def setup_scheduler():
     scheduler = AsyncIOScheduler()
     
@@ -342,6 +345,9 @@ async def setup_scheduler():
     scheduler.start()
     logger.info("✅ Планировщик запущен")
 
+# ============================================
+# ЗАПУСК И ОСТАНОВКА
+# ============================================
 async def on_startup(dp):
     logger.info("🚀 Бот запускается...")
     asyncio.create_task(run_web_server())
