@@ -3,6 +3,8 @@ import sys
 import logging
 import asyncio
 import datetime
+import signal
+import atexit
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
@@ -51,13 +53,11 @@ else:
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
 logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
 
-# --- ВЕБ-СЕРВЕР ДЛЯ ПИНГА (ЧТОБЫ RENDER НЕ УСЫПЛЯЛ) ---
+# --- ВЕБ-СЕРВЕР ДЛЯ ПИНГА ---
 async def handle_ping(request):
-    """Обработчик для пинг-запросов от UptimeRobot"""
     return web.Response(text='OK')
 
 async def run_web_server():
-    """Запуск простого веб-сервера для пинга"""
     app = web.Application()
     app.router.add_get('/', handle_ping)
     app.router.add_get('/ping', handle_ping)
@@ -114,31 +114,27 @@ async def handle_photo(message: types.Message):
     user_id = message.from_user.id
     logger.info(f"📸 Получено фото от пользователя {user_id}")
     
-    # Проверка прав администратора
     if not is_admin(user_id):
         logger.warning(f"⛔️ Пользователь {user_id} не админ, фото не сохранено")
         await message.reply("⛔️ У вас нет доступа к этому боту.")
         return
     
     try:
-        # Получаем фото
         photo = message.photo[-1]
         file_id = photo.file_id
         logger.info(f"🆔 File_id: {file_id}")
         
-        # Сохраняем фото
         file_info = await bot.get_file(file_id)
         file_path = f"data/photos/{file_id}.jpg"
         await bot.download_file(file_info.file_path, file_path)
         logger.info(f"💾 Фото сохранено: {file_path}")
         
-        # Сохраняем в базу
         success = db.add_photo(file_id, file_path)
         
         if success:
             await message.reply("✅ Фото добавлено в очередь на публикацию!")
         else:
-            await message.reply("❌ Ошибка при сохранении фото в базу данных")
+            await message.reply("❌ Ошибка при сохранении фото в базу danych")
             
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке фото: {e}")
@@ -151,12 +147,11 @@ async def generate_post_text():
     и автоматическими повторными попытками при ошибках
     """
     
-    # Список моделей в порядке предпочтения
     models_to_try = [
-        'gemini-2.5-flash',      # Основная модель (быстрая)
-        'gemini-2.5-pro',        # Резервная (мощная)
-        'gemini-3.0-flash-preview', # Новейшая быстрая
-        'gemini-3.1-pro-preview'   # Самая мощная, если всё остальное недоступно
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3.0-flash-preview',
+        'gemini-3.1-pro-preview'
     ]
     
     prompt = """Напиши красивый пост для Telegram канала цветочного магазина о букете на фото.
@@ -177,7 +172,6 @@ async def generate_post_text():
 
 Пост должен быть на русском, длиной 300-500 символов (без учёта блока в конце)."""
     
-    # Если ключ не задан, сразу возвращаем запасной текст
     if not GEMINI_API_KEY:
         logger.warning("⚠️ Нет ключа Gemini, использую запасной текст")
         return get_default_post_text(datetime=True)
@@ -185,22 +179,18 @@ async def generate_post_text():
     last_error = None
     used_models = []
     
-    # Пробуем каждую модель по очереди
     for model_name in models_to_try:
         try:
             logger.info(f"🚀 Пробую модель: {model_name}")
             used_models.append(model_name)
             
             current_model = genai.GenerativeModel(model_name)
-            
-            # Добавляем небольшую задержку между попытками
             await asyncio.sleep(1)
             
             response = current_model.generate_content(prompt)
             
             if response and response.text:
                 logger.info(f"✅ Успех с моделью: {model_name}")
-                # Логируем длину ответа для отладки
                 logger.info(f"📝 Длина текста: {len(response.text)} символов")
                 return response.text
             else:
@@ -212,28 +202,23 @@ async def generate_post_text():
             logger.warning(f"❌ Ошибка с моделью {model_name}: {error_str[:200]}")
             last_error = e
             
-            # Если ошибка 429 (квота), добавляем паузу перед следующей попыткой
             if "429" in error_str or "quota" in error_str.lower():
                 logger.info("⏳ Обнаружена ошибка квоты, жду 5 секунд...")
                 await asyncio.sleep(5)
                 continue
             
-            # Если ошибка "not found" или "does not exist", пробуем следующую модель сразу
             if "not found" in error_str.lower() or "does not exist" in error_str.lower():
                 logger.info(f"⏩ Модель {model_name} не существует, пробую следующую")
                 continue
     
-    # Если все модели не сработали, логируем детальную ошибку
     logger.error(f"❌ Все модели не сработали. Последняя ошибка: {last_error}")
     logger.error(f"📋 Пробовали модели: {', '.join(used_models)}")
     
-    # Возвращаем запасной текст с отметкой времени
     return get_default_post_text(datetime=True)
 
 def get_default_post_text(datetime=False):
     """Запасной текст, если AI не сработает"""
     if datetime:
-        # Добавляем дату и время, чтобы видеть, что это fallback
         now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
         return (
             f"🌸 Пост от {now}\n\n"
@@ -262,13 +247,11 @@ def get_default_post_text(datetime=False):
         )
 
 async def post_random_photo():
-    """Публикация случайного фото из базы"""
     logger.info("⏰ Запуск публикации по расписанию")
     
     photo = db.get_random_unposted_photo()
     if not photo:
         logger.warning("⚠️ Нет фото для публикации")
-        # Уведомляем админов, что фото кончились
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(
@@ -282,10 +265,8 @@ async def post_random_photo():
     
     logger.info(f"🖼️ Выбрано фото для публикации: {photo['file_id']}")
     
-    # Генерируем текст поста с fallback
     post_text = await generate_post_text()
     
-    # Публикуем в канал
     try:
         with open(photo['file_path'], 'rb') as photo_file:
             await bot.send_photo(
@@ -295,7 +276,6 @@ async def post_random_photo():
                 parse_mode=ParseMode.HTML
             )
         
-        # Отмечаем фото как опубликованное
         db.mark_as_posted(photo['id'])
         stats = db.get_stats()
         logger.info(f"✅ Пост опубликован. Осталось фото: {stats['pending']}")
@@ -303,14 +283,11 @@ async def post_random_photo():
         logger.error(f"❌ Ошибка при публикации: {e}")
 
 async def setup_scheduler():
-    """Настройка планировщика"""
     scheduler = AsyncIOScheduler()
     
-    # Разбираем время из POST_TIMES
     for time_str in POST_TIMES:
         try:
             hour, minute = map(int, time_str.split(':'))
-            # Переводим в UTC (Новосибирск UTC+7)
             utc_hour = hour - 7
             if utc_hour < 0:
                 utc_hour += 24
@@ -327,16 +304,12 @@ async def setup_scheduler():
     logger.info("✅ Планировщик запущен")
 
 async def on_startup(dp):
-    """Действия при запуске бота"""
     logger.info("🚀 Бот запускается...")
-    # Запускаем веб-сервер для пинга
     asyncio.create_task(run_web_server())
-    # Запускаем планировщик
     await setup_scheduler()
     logger.info("🚀 Бот-постер запущен")
 
 async def on_shutdown(dp):
-    """Действия при остановке бота"""
     db.close()
     logger.info("👋 Бот-постер остановлен")
 
