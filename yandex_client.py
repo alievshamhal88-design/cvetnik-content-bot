@@ -65,7 +65,7 @@ class YandexStorage:
         self.bucket_name = Config.YC_BUCKET_NAME
         self.endpoint_url = "https://storage.yandexcloud.net"
         
-        # Создаем S3-клиент - используем BotoConfig вместо Config
+        # Создаем S3-клиент с исправленным импортом BotoConfig
         self.s3 = boto3.client(
             's3',
             endpoint_url=self.endpoint_url,
