@@ -1,287 +1,308 @@
-import os
-import sys
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 import logging
 import asyncio
-import datetime
-import signal
-import atexit
-from io import BytesIO
-from aiohttp import web
-from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.middlewares.logging import LoggingMiddleware
-from aiogram.types import ParseMode, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+import uuid
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from config import ADMIN_IDS, POST_TIMES, YANDEX_FOLDER_ID, YANDEX_API_KEY
+from config import Config
 from database import Database
-from yandex_client import YandexGPTClient
+from yandex_client import YandexGPT, YandexStorage
 
-# ============================================
-# НАСТРОЙКИ
-# ============================================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@cvetnik_nsk")
-
-if not BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN не найден в переменных окружения!")
-    exit(1)
-
-# ============================================
-# ЛОГИРОВАНИЕ
-# ============================================
-logging.basicConfig(level=logging.INFO)
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ИНИЦИАЛИЗАЦИЯ
-# ============================================
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
-dp.middleware.setup(LoggingMiddleware())
+# Инициализация компонентов
 db = Database()
+storage = YandexStorage()
+gpt = YandexGPT()
 
-# Инициализация YandexGPT
-try:
-    yandex_gpt = YandexGPTClient()
-    logger.info("✅ YandexGPT клиент создан для постера")
-except ValueError as e:
-    logger.error(f"❌ Ошибка создания YandexGPT клиента: {e}")
-    yandex_gpt = None
+# Временное хранилище для состояний
+user_data = {}
 
-logger.info(f"📢 Канал для публикации: {CHANNEL_ID}")
-
-# ============================================
-# ПИНГ-СЕРВЕР
-# ============================================
-async def handle_ping(request):
-    return web.Response(text='OK')
-
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_ping)
-    app.router.add_get('/ping', handle_ping)
-    app.router.add_get('/health', handle_ping)
-    
-    port = int(os.environ.get('PORT', 10000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logger.info(f"✅ Пинг-сервер запущен на порту {port}")
-
-# ============================================
-# ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА
-# ============================================
+# Проверка на администратора
 def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    return user_id == Config.ADMIN_ID
 
-# ============================================
-# ОБРАБОТЧИКИ КОМАНД
-# ============================================
-@dp.message_handler(commands=['start'])
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    logger.info(f"🖥️ Команда /start от пользователя {user_id}")
-    
-    if not is_admin(user_id):
-        logger.warning(f"⛔️ Доступ запрещён для {user_id}")
-        await message.reply("⛔️ У вас нет доступа к этому боту.")
-        return
-    
-    await message.reply(
-        "🌸 Привет! Я бот для автоматического постинга в канал.\n\n"
-        "📸 Просто отправляйте мне фото, и я буду их публиковать по расписанию.\n"
-        "Каждый пост будет содержать название и описание от YandexGPT.\n\n"
-        "Используйте /stats чтобы увидеть статистику.\n"
-        "Используйте /reset чтобы сбросить статусы всех фото."
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
+    user = update.effective_user
+    welcome_text = (
+        f"👋 Привет, {user.first_name}!\n\n"
+        "Я бот для генерации контента для цветочного магазина.\n\n"
+        "📝 Доступные команды:\n"
+        "/start - приветствие\n"
+        "/help - помощь\n"
+        "/list - список всех букетов\n"
+        "/generate - сгенерировать описание для последнего букета\n\n"
+        "Просто отправь мне фото букета, и я сохраню его в облако!"
     )
+    await update.message.reply_text(welcome_text)
 
-@dp.message_handler(commands=['stats'])
-async def cmd_stats(message: types.Message):
-    user_id = message.from_user.id
-    logger.info(f"📊 Команда /stats от пользователя {user_id}")
-    
-    if not is_admin(user_id):
-        logger.warning(f"⛔️ Доступ запрещён для {user_id}")
-        return
-    
-    stats = db.get_stats()
-    await message.reply(
-        f"📊 **Статистика**\n\n"
-        f"📸 Всего фото: {stats['total']}\n"
-        f"✅ Опубликовано: {stats['posted']}\n"
-        f"⏳ В очереди: {stats['pending']}",
-        parse_mode=ParseMode.MARKDOWN
+# Команда /help
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
+    help_text = (
+        "📋 *Справка по командам:*\n\n"
+        "/start - приветствие\n"
+        "/help - это сообщение\n"
+        "/list - список всех букетов\n"
+        "/generate - сгенерировать описание для последнего букета\n\n"
+        "📸 *Работа с фото:*\n"
+        "Отправьте фото букета - оно сохранится в Яндекс.Облако\n"
+        "После сохранения можно сгенерировать описание через YandexGPT"
     )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
-@dp.message_handler(commands=['reset'])
-async def cmd_reset(message: types.Message):
-    user_id = message.from_user.id
-    logger.info(f"🔄 Команда /reset от пользователя {user_id}")
+# Обработчик фото
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик получения фото"""
+    user_id = update.effective_user.id
     
+    # Проверяем права
     if not is_admin(user_id):
-        logger.warning(f"⛔️ Доступ запрещён для {user_id}")
-        await message.reply("⛔️ Нет доступа")
-        return
-    
-    db.reset_all_photos()
-    stats = db.get_stats()
-    
-    await message.reply(
-        f"🔄 **Все фото сброшены!**\n\n"
-        f"📸 Всего фото: {stats['total']}\n"
-        f"✅ Опубликовано: 0\n"
-        f"⏳ В очереди: {stats['pending']}",
-        parse_mode='Markdown'
-    )
-
-# ============================================
-# ОБРАБОТКА ФОТО
-# ============================================
-@dp.message_handler(content_types=['photo'])
-async def handle_photo(message: types.Message):
-    user_id = message.from_user.id
-    logger.info(f"📸 Получено фото от пользователя {user_id}")
-    
-    if not is_admin(user_id):
-        logger.warning(f"⛔️ Пользователь {user_id} не админ, фото не сохранено")
-        await message.reply("⛔️ У вас нет доступа к этому боту.")
+        await update.message.reply_text("❌ У вас нет прав для загрузки фото")
         return
     
     try:
-        photo = message.photo[-1]
+        # Получаем фото
+        photo = update.message.photo[-1]
         file_id = photo.file_id
-        logger.info(f"🆔 File_id: {file_id}")
+        file_unique_id = photo.file_unique_id
         
-        file_info = await bot.get_file(file_id)
-        file_path = f"data/photos/{file_id}.jpg"
-        await bot.download_file(file_info.file_path, file_path)
-        logger.info(f"💾 Фото сохранено: {file_path}")
+        # Отправляем статус
+        status_msg = await update.message.reply_text("⏳ Сохраняю фото в облако...")
         
-        success = db.add_photo(file_id, file_path)
+        # Скачиваем фото
+        file = await context.bot.get_file(file_id)
+        file_bytes = await file.download_as_bytearray()
         
-        if success:
-            await message.reply("✅ Фото добавлено в очередь на публикацию!")
+        # Генерируем имя файла
+        file_name = f"bouquets/{file_unique_id}.jpg"
+        
+        # Загружаем в облако
+        photo_url = storage.upload_file(bytes(file_bytes), file_name)
+        
+        if photo_url:
+            # Сохраняем в базу данных
+            bouquet_id = db.add_bouquet(file_id, photo_url, file_name)
+            
+            if bouquet_id:
+                # Сохраняем ID для последующей генерации
+                user_data[user_id] = {'last_bouquet_id': bouquet_id}
+                
+                # Создаем клавиатуру
+                keyboard = [
+                    [InlineKeyboardButton("✨ Сгенерировать описание", callback_data=f"generate_{bouquet_id}")],
+                    [InlineKeyboardButton("📋 Список всех букетов", callback_data="list")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await status_msg.edit_text(
+                    f"✅ Фото успешно сохранено!\n\n"
+                    f"📸 ID букета: {bouquet_id}\n"
+                    f"🔗 Ссылка: {photo_url}",
+                    reply_markup=reply_markup
+                )
+            else:
+                await status_msg.edit_text("❌ Ошибка при сохранении в базу данных")
         else:
-            await message.reply("❌ Ошибка при сохранении фото в базу danych")
+            await status_msg.edit_text("❌ Ошибка при загрузке в облако")
             
     except Exception as e:
-        logger.error(f"❌ Ошибка при обработке фото: {e}")
-        await message.reply(f"❌ Произошла ошибка: {e}")
+        logger.error(f"Ошибка обработки фото: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
-# ============================================
-# ПУБЛИКАЦИЯ ПОСТА
-# ============================================
-async def post_random_photo():
-    """Публикация случайного фото с AI-генерацией текста"""
-    logger.info("⏰ Запуск публикации по расписанию")
+# Команда /list
+async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список всех букетов"""
+    user_id = update.effective_user.id
     
-    photo = db.get_random_unposted_photo()
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав")
+        return
     
-    # Если фото нет, обнуляем все и берем любое
-    if not photo:
-        logger.warning("⚠️ Все фото опубликованы, обнуляю статистику...")
-        stats = db.get_stats()
-        total_photos = stats['total']
-        
-        db.reset_all_photos()
-        
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(
-                    admin_id,
-                    f"🔄 **Круг публикаций завершен!**\n\n"
-                    f"📸 Всего опубликовано: {total_photos} фото\n"
-                    f"✨ Начинаю публиковать заново с начала.\n\n"
-                    f"Хотите добавить новые фото? Просто отправьте их мне!",
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"❌ Не удалось отправить уведомление админу {admin_id}: {e}")
-        
-        photo = db.get_random_unposted_photo()
-        
-        if not photo:
-            logger.error("❌ Критическая ошибка: нет фото даже после обнуления!")
-            return
+    bouquets = db.get_all_bouquets()
     
-    logger.info(f"🖼️ Выбрано фото для публикации: {photo['file_id']}")
+    if not bouquets:
+        await update.message.reply_text("📭 В базе пока нет букетов")
+        return
     
-    # Генерируем текст поста через AI
-    if yandex_gpt:
-        post_text = yandex_gpt.generate_post_text()
+    await update.message.reply_text(f"📊 Всего букетов: {len(bouquets)}")
+    
+    for bouquet in bouquets[:5]:  # Показываем первые 5
+        # Создаем клавиатуру для каждого букета
+        keyboard = [
+            [InlineKeyboardButton("✨ Сгенерировать описание", callback_data=f"generate_{bouquet['id']}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        caption = f"🌸 *Букет #{bouquet['id']}*\n"
+        if bouquet['description']:
+            caption += f"\n📝 {bouquet['description'][:100]}..."
+        else:
+            caption += "\n❌ Описание отсутствует"
+        
+        await update.message.reply_photo(
+            photo=bouquet['photo_url'],
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+# Команда /generate
+async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Генерирует описание для последнего букета"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав")
+        return
+    
+    # Проверяем, есть ли последний букет
+    if user_id not in user_data or 'last_bouquet_id' not in user_data[user_id]:
+        await update.message.reply_text("❌ Сначала отправьте фото букета")
+        return
+    
+    bouquet_id = user_data[user_id]['last_bouquet_id']
+    await generate_description(update, context, bouquet_id)
+
+# Функция генерации описания
+async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYPE, bouquet_id):
+    """Генерирует описание для указанного букета"""
+    user_id = update.effective_user.id
+    
+    # Получаем букет из базы
+    bouquet = db.get_bouquet(bouquet_id)
+    if not bouquet:
+        await update.message.reply_text("❌ Букет не найден")
+        return
+    
+    status_msg = await update.message.reply_text("⏳ Генерирую описание через YandexGPT...")
+    
+    # Формируем промпт
+    prompt = f"Составь красивое описание для букета цветов. Название букета: {bouquet['name']}. Опиши цветы, их значение, кому подойдет такой букет."
+    
+    # Генерируем описание
+    description = gpt.generate_description(prompt)
+    
+    if description:
+        # Сохраняем в базу
+        db.update_description(bouquet_id, description)
+        db.add_generation(bouquet_id, prompt, description)
+        
+        # Создаем клавиатуру
+        keyboard = [
+            [InlineKeyboardButton("📋 Список букетов", callback_data="list")],
+            [InlineKeyboardButton("🔄 Сгенерировать снова", callback_data=f"generate_{bouquet_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await status_msg.edit_text(
+            f"✅ *Описание сгенерировано!*\n\n"
+            f"📝 {description}\n\n"
+            f"🌸 Букет #{bouquet_id}",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     else:
-        # Запасной вариант, если AI недоступен
-        now = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
-        post_text = f"🌸 Пост от {now}\n\n(Сгенерировано вручную, AI временно недоступен)"
+        await status_msg.edit_text("❌ Ошибка генерации описания")
+
+# Обработчик callback-запросов
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки"""
+    query = update.callback_query
+    await query.answer()
     
-    # Добавляем стандартные контакты
-    post_text += (
-        "\n\nЦветник 🌸 | Новосибирск\n"
-        "Свежие цветы и букеты с доставкой 💐\n"
-        "Заказ онлайн 👉 Открыть каталог (https://cvetniknsk.ru/)\n\n"
-        "Мы на ⭐️📍 2ГИС 3 филиала (https://2gis.ru/novosibirsk/branches/70000001091590889)\n"
-        "⚡️ Быстрый заказ 👉 @cvetniknsk_bot\n\n"
-        "📍 2-я Марата, 22 — @cvetnik_sib\n"
-        "📍 Некрасова, 41 — @cvetnik1_sib\n"
-        "📍 Связистов, 113А — @cvetniksvezistrov"
-    )
+    user_id = query.from_user.id
     
-    # Публикуем в канал
-    try:
-        with open(photo['file_path'], 'rb') as photo_file:
-            await bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=photo_file,
-                caption=post_text,
-                parse_mode=ParseMode.HTML
+    if not is_admin(user_id):
+        await query.edit_message_text("❌ У вас нет прав")
+        return
+    
+    data = query.data
+    
+    if data == "list":
+        # Показываем список букетов
+        bouquets = db.get_all_bouquets()
+        
+        if not bouquets:
+            await query.edit_message_text("📭 В базе пока нет букетов")
+            return
+        
+        await query.edit_message_text(f"📊 Всего букетов: {len(bouquets)}")
+        
+        for bouquet in bouquets[:3]:
+            keyboard = [
+                [InlineKeyboardButton("✨ Сгенерировать описание", callback_data=f"generate_{bouquet['id']}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            caption = f"🌸 *Букет #{bouquet['id']}*\n"
+            if bouquet['description']:
+                caption += f"\n📝 {bouquet['description'][:100]}..."
+            else:
+                caption += "\n❌ Описание отсутствует"
+            
+            await query.message.reply_photo(
+                photo=bouquet['photo_url'],
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
             )
         
-        db.mark_as_posted(photo['id'])
-        stats = db.get_stats()
-        logger.info(f"✅ Пост опубликован. Осталось фото: {stats['pending']}")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при публикации: {e}")
+    elif data.startswith("generate_"):
+        # Генерируем описание
+        bouquet_id = int(data.split("_")[1])
+        await generate_description(update, context, bouquet_id)
 
-# ============================================
-# ПЛАНИРОВЩИК
-# ============================================
-async def setup_scheduler():
-    scheduler = AsyncIOScheduler()
+# Команда /admin
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка прав администратора"""
+    user_id = update.effective_user.id
     
-    for time_str in POST_TIMES:
-        try:
-            hour, minute = map(int, time_str.split(':'))
-            utc_hour = hour - 7
-            if utc_hour < 0:
-                utc_hour += 24
-                
-            scheduler.add_job(
-                post_random_photo,
-                trigger=CronTrigger(hour=utc_hour, minute=minute)
-            )
-            logger.info(f"📅 Запланирован пост на {hour:02d}:{minute:02d} MSK (UTC {utc_hour:02d}:{minute:02d})")
-        except Exception as e:
-            logger.error(f"❌ Ошибка в настройке времени {time_str}: {e}")
+    if is_admin(user_id):
+        await update.message.reply_text("✅ Вы администратор")
+    else:
+        await update.message.reply_text("❌ Вы не администратор")
+
+# Обработка ошибок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка: {context.error}")
+
+def main():
+    """Главная функция"""
+    # Создаем приложение
+    application = Application.builder().token(Config.BOT_TOKEN).build()
     
-    scheduler.start()
-    logger.info("✅ Планировщик запущен")
-
-# ============================================
-# ЗАПУСК И ОСТАНОВКА
-# ============================================
-async def on_startup(dp):
-    logger.info("🚀 Бот запускается...")
-    asyncio.create_task(run_web_server())
-    await setup_scheduler()
-    logger.info("🚀 Бот-постер запущен")
-
-async def on_shutdown(dp):
-    db.close()
-    logger.info("👋 Бот-постер остановлен")
+    # Добавляем обработчики команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("list", list_bouquets))
+    application.add_handler(CommandHandler("generate", generate_command))
+    application.add_handler(CommandHandler("admin", admin))
+    
+    # Обработчик фото
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # Обработчик callback-кнопок
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    # Запускаем бота
+    logger.info("🚀 Бот контента запущен...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    from aiogram import executor
-    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
+    main()
