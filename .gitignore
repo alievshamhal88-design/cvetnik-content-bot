@@ -1,4 +1,15 @@
+# Environment variables
 .env
-data/
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
+.Python
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
