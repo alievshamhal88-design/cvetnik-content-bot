@@ -4,6 +4,8 @@
 import logging
 import asyncio
 import uuid
+import threading
+import requests  # Добавляем requests для API-запроса
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -11,6 +13,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import Config
 from database import Database
 from yandex_client import YandexGPT, YandexStorage
+from web_server import start_health_server
 
 # Настройка логирования
 logging.basicConfig(
@@ -18,6 +21,21 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Функция принудительного сброса подключений
+def force_reset_bot():
+    """Отключает все старые вебхуки и сбрасывает pending updates"""
+    try:
+        token = Config.BOT_TOKEN
+        # Сбрасываем вебхук и удаляем все ожидающие обновления
+        url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
+        response = requests.get(url)
+        if response.status_code == 200:
+            logger.info("✅ Все старые подключения сброшены")
+        else:
+            logger.warning(f"⚠️ Ошибка сброса: {response.text}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сбросе: {e}")
 
 # Инициализация компонентов
 db = Database()
@@ -27,7 +45,7 @@ gpt = YandexGPT()
 # Временное хранилище для состояний
 user_data = {}
 
-# Проверка на администратора (теперь поддерживает список)
+# Проверка на администратора
 def is_admin(user_id):
     return user_id in Config.ADMIN_IDS
 
@@ -42,7 +60,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - приветствие\n"
         "/help - помощь\n"
         "/list - список всех букетов\n"
-        "/generate - сгенерировать описание для последнего букета\n\n"
+        "/generate - сгенерировать описание для последнего букета\n"
+        "/myid - показать ваш Telegram ID\n"
+        "/admin - проверить права администратора\n\n"
         "Просто отправь мне фото букета, и я сохраню его в облако!"
     )
     await update.message.reply_text(welcome_text)
@@ -55,7 +75,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - приветствие\n"
         "/help - это сообщение\n"
         "/list - список всех букетов\n"
-        "/generate - сгенерировать описание для последнего букета\n\n"
+        "/generate - сгенерировать описание для последнего букета\n"
+        "/myid - показать ваш Telegram ID\n"
+        "/admin - проверить права администратора\n\n"
         "📸 *Работа с фото:*\n"
         "Отправьте фото букета - оно сохранится в Яндекс.Облако\n"
         "После сохранения можно сгенерировать описание через YandexGPT"
@@ -78,39 +100,29 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик получения фото"""
     user_id = update.effective_user.id
     
-    # Проверяем права
     if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав для загрузки фото")
         return
     
     try:
-        # Получаем фото
         photo = update.message.photo[-1]
         file_id = photo.file_id
         file_unique_id = photo.file_unique_id
         
-        # Отправляем статус
         status_msg = await update.message.reply_text("⏳ Сохраняю фото в облако...")
         
-        # Скачиваем фото
         file = await context.bot.get_file(file_id)
         file_bytes = await file.download_as_bytearray()
         
-        # Генерируем имя файла
         file_name = f"bouquets/{file_unique_id}.jpg"
-        
-        # Загружаем в облако
         photo_url = storage.upload_file(bytes(file_bytes), file_name)
         
         if photo_url:
-            # Сохраняем в базу данных
             bouquet_id = db.add_bouquet(file_id, photo_url, file_name)
             
             if bouquet_id:
-                # Сохраняем ID для последующей генерации
                 user_data[user_id] = {'last_bouquet_id': bouquet_id}
                 
-                # Создаем клавиатуру
                 keyboard = [
                     [InlineKeyboardButton("✨ Сгенерировать описание", callback_data=f"generate_{bouquet_id}")],
                     [InlineKeyboardButton("📋 Список всех букетов", callback_data="list")]
@@ -134,7 +146,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /list
 async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает список всех букетов"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -149,8 +160,7 @@ async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"📊 Всего букетов: {len(bouquets)}")
     
-    for bouquet in bouquets[:5]:  # Показываем первые 5
-        # Создаем клавиатуру для каждого букета
+    for bouquet in bouquets[:5]:
         keyboard = [
             [InlineKeyboardButton("✨ Сгенерировать описание", callback_data=f"generate_{bouquet['id']}")]
         ]
@@ -171,14 +181,12 @@ async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /generate
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Генерирует описание для последнего букета"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав")
         return
     
-    # Проверяем, есть ли последний букет
     if user_id not in user_data or 'last_bouquet_id' not in user_data[user_id]:
         await update.message.reply_text("❌ Сначала отправьте фото букета")
         return
@@ -188,10 +196,8 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Функция генерации описания
 async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYPE, bouquet_id):
-    """Генерирует описание для указанного букета"""
     user_id = update.effective_user.id
     
-    # Получаем букет из базы
     bouquet = db.get_bouquet(bouquet_id)
     if not bouquet:
         await update.message.reply_text("❌ Букет не найден")
@@ -199,18 +205,13 @@ async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYP
     
     status_msg = await update.message.reply_text("⏳ Генерирую описание через YandexGPT...")
     
-    # Формируем промпт
     prompt = f"Составь красивое описание для букета цветов. Название букета: {bouquet['name']}. Опиши цветы, их значение, кому подойдет такой букет."
-    
-    # Генерируем описание
     description = gpt.generate_description(prompt)
     
     if description:
-        # Сохраняем в базу
         db.update_description(bouquet_id, description)
         db.add_generation(bouquet_id, prompt, description)
         
-        # Создаем клавиатуру
         keyboard = [
             [InlineKeyboardButton("📋 Список букетов", callback_data="list")],
             [InlineKeyboardButton("🔄 Сгенерировать снова", callback_data=f"generate_{bouquet_id}")]
@@ -229,7 +230,6 @@ async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Обработчик callback-запросов
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
     
@@ -242,7 +242,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data == "list":
-        # Показываем список букетов
         bouquets = db.get_all_bouquets()
         
         if not bouquets:
@@ -271,13 +270,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
     elif data.startswith("generate_"):
-        # Генерируем описание
         bouquet_id = int(data.split("_")[1])
         await generate_description(update, context, bouquet_id)
 
 # Команда /admin
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка прав администратора"""
     user_id = update.effective_user.id
     
     if is_admin(user_id):
@@ -287,11 +284,17 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработка ошибок
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
     logger.error(f"Ошибка: {context.error}")
 
 def main():
     """Главная функция"""
+    # ПРИНУДИТЕЛЬНЫЙ СБРОС ПЕРЕД ЗАПУСКОМ
+    force_reset_bot()
+    
+    # Запускаем сервер для проверки здоровья
+    start_health_server()
+    logger.info("✅ Сервер здоровья запущен")
+    
     # Создаем приложение
     application = Application.builder().token(Config.BOT_TOKEN).build()
     
@@ -301,7 +304,7 @@ def main():
     application.add_handler(CommandHandler("list", list_bouquets))
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("admin", admin))
-    application.add_handler(CommandHandler("myid", show_my_id))  # новая команда
+    application.add_handler(CommandHandler("myid", show_my_id))
     
     # Обработчик фото
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
