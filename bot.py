@@ -5,7 +5,7 @@ import logging
 import asyncio
 import uuid
 import threading
-import requests  # Добавляем requests для API-запроса
+import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -27,7 +27,6 @@ def force_reset_bot():
     """Отключает все старые вебхуки и сбрасывает pending updates"""
     try:
         token = Config.BOT_TOKEN
-        # Сбрасываем вебхук и удаляем все ожидающие обновления
         url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
         response = requests.get(url)
         if response.status_code == 200:
@@ -146,6 +145,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /list
 async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список всех букетов"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -181,6 +181,7 @@ async def list_bouquets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /generate
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Генерирует описание для последнего букета"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -196,6 +197,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Функция генерации описания
 async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYPE, bouquet_id):
+    """Генерирует описание для указанного букета"""
     user_id = update.effective_user.id
     
     bouquet = db.get_bouquet(bouquet_id)
@@ -230,6 +232,7 @@ async def generate_description(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Обработчик callback-запросов
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
     
@@ -275,6 +278,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /admin
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка прав администратора"""
     user_id = update.effective_user.id
     
     if is_admin(user_id):
@@ -284,11 +288,12 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработка ошибок
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
     logger.error(f"Ошибка: {context.error}")
 
 def main():
     """Главная функция"""
-    # ПРИНУДИТЕЛЬНЫЙ СБРОС ПЕРЕД ЗАПУСКОМ
+    # Принудительный сброс перед запуском
     force_reset_bot()
     
     # Запускаем сервер для проверки здоровья
