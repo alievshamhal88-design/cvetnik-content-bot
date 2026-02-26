@@ -5,7 +5,7 @@ load_dotenv()
 
 class Config:
     # Telegram - ТОКЕН КОНТЕНТ БОТА
-    BOT_TOKEN = "8378996136:AAFHQ-NPDbRVljd0Ap02IU9EdohY6Bma-O4"
+    BOT_TOKEN = "8378996136:AAFHQ-NPDbRVljd0Ap02IU9EdohY6Bma-O4"  # Убедитесь, что это точно тот токен
     
     # Yandex GPT
     YANDEX_FOLDER = "b1gag20fr95ujgos7fv9"
@@ -17,7 +17,7 @@ class Config:
     YC_BUCKET_NAME = "cvetnik-photos"
     
     # Admin - два админа
-    ADMIN_IDS = [8378996136, 123456789]  # замените 123456789 на второй ID
+    ADMIN_IDS = [8378996136, 123456789]  # замените 123456789 на реальный ID второго админа
     
     # Канал для проверки подписки
     CHANNEL_ID = "@cvetnik_nsk"
