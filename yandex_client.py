@@ -1,7 +1,7 @@
 import requests
 import logging
 import boto3
-from botocore.client import Config
+from botocore.client import Config as BotoConfig
 from botocore.exceptions import ClientError
 from typing import Optional
 import uuid
@@ -65,13 +65,13 @@ class YandexStorage:
         self.bucket_name = Config.YC_BUCKET_NAME
         self.endpoint_url = "https://storage.yandexcloud.net"
         
-        # Создаем S3-клиент
+        # Создаем S3-клиент - используем BotoConfig вместо Config
         self.s3 = boto3.client(
             's3',
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            config=Config(signature_version='s3v4'),
+            config=BotoConfig(signature_version='s3v4'),
             region_name='ru-central1'
         )
         logger.info(f"✅ Storage клиент инициализирован для бакета {self.bucket_name}")
