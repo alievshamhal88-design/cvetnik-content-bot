@@ -40,7 +40,7 @@ class YandexStorageClient:
                 Key=file_name,
                 Body=file_bytes,
                 ContentType=content_type,
-                ACL='public-read'  # публичный доступ
+                ACL='public-read'
             )
             
             # Формируем ссылку
@@ -52,26 +52,6 @@ class YandexStorageClient:
             logger.error(f"❌ Ошибка загрузки в облако: {e}")
             return None
 
-    def delete_file(self, file_name: str) -> bool:
-        """Удаляет файл из облака"""
-        try:
-            self.s3.delete_object(
-                Bucket=self.bucket_name,
-                Key=file_name
-            )
-            logger.info(f"✅ Файл удалён: {file_name}")
-            return True
-        except ClientError as e:
-            logger.error(f"❌ Ошибка удаления: {e}")
-            return False
-
-    def file_exists(self, file_name: str) -> bool:
-        """Проверяет, существует ли файл"""
-        try:
-            self.s3.head_object(
-                Bucket=self.bucket_name,
-                Key=file_name
-            )
-            return True
-        except ClientError:
-            return False
+    def get_file_url(self, file_name: str) -> str:
+        """Возвращает публичную ссылку на файл"""
+        return f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
