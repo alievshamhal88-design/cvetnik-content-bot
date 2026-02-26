@@ -10,15 +10,12 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class YandexGPT:
-    """Клиент для YandexGPT"""
-    
     def __init__(self):
         self.folder_id = Config.YANDEX_FOLDER
         self.api_key = Config.YANDEX_API_KEY
         self.url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
     def generate_description(self, prompt: str) -> Optional[str]:
-        """Генерирует описание для букета"""
         try:
             headers = {
                 "Authorization": f"Api-Key {self.api_key}",
@@ -57,8 +54,6 @@ class YandexGPT:
 
 
 class YandexStorage:
-    """Клиент для Яндекс Object Storage"""
-    
     def __init__(self):
         self.access_key = Config.YC_ACCESS_KEY
         self.secret_key = Config.YC_SECRET_KEY
@@ -75,7 +70,11 @@ class YandexStorage:
                 endpoint_url=self.endpoint_url,
                 aws_access_key_id=self.access_key,
                 aws_secret_access_key=self.secret_key,
-                config=BotoConfig(signature_version='s3v4'),
+                config=BotoConfig(
+                    signature_version='s3v4',
+                    region_name='ru-central1',
+                    s3={'addressing_style': 'virtual'}
+                ),
                 region_name='ru-central1'
             )
             logger.info("✅ Storage клиент создан")
@@ -94,7 +93,6 @@ class YandexStorage:
             self.s3 = None
 
     def upload_file(self, file_bytes: bytes, file_name: str = None, content_type: str = 'image/jpeg') -> Optional[str]:
-        """Загружает файл в облако"""
         if self.s3 is None:
             logger.error("❌ Storage клиент не инициализирован")
             return None
@@ -106,6 +104,7 @@ class YandexStorage:
             logger.info(f"📤 Попытка загрузки файла: {file_name}")
             logger.info(f"📦 Размер файла: {len(file_bytes)} байт")
             
+            # Добавляем ContentDisposition для корректной загрузки
             self.s3.put_object(
                 Bucket=self.bucket_name,
                 Key=file_name,
@@ -123,14 +122,15 @@ class YandexStorage:
             error_msg = e.response['Error']['Message']
             logger.error(f"❌ Ошибка {error_code}: {error_msg}")
             
-            if error_code == 'AccessDenied':
-                logger.error("🔑 Проблема с правами доступа")
+            if error_code == 'SignatureDoesNotMatch':
+                logger.error("🔑 Проблема с подписью запроса")
                 logger.error("📋 Проверьте:")
-                logger.error("   1. Что ключи доступа правильные")
-                logger.error("   2. Что у сервисного аккаунта есть роль storage.uploader")
-                logger.error("   3. Что бакет существует и доступен")
+                logger.error("   1. Правильно ли указаны Access Key и Secret Key")
+                logger.error("   2. Совпадает ли регион (ru-central1)")
+                logger.error("   3. Нет ли опечаток в ключах")
+            elif error_code == 'AccessDenied':
+                logger.error("🔑 Проблема с правами доступа")
             return None
 
     def get_file_url(self, file_name: str) -> str:
-        """Возвращает URL файла"""
         return f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
