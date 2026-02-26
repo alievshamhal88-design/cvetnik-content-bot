@@ -63,6 +63,7 @@ class YandexStorage:
         logger.info(f"🔑 Access Key (первые 10 символов): {self.access_key[:10]}...")
         logger.info(f"🔐 Secret Key (первые 5 символов): {self.secret_key[:5]}...")
         logger.info(f"📦 Bucket: {self.bucket_name}")
+        logger.info(f"🌍 Region: ru-central1")
         
         try:
             self.s3 = boto3.client(
@@ -72,8 +73,7 @@ class YandexStorage:
                 aws_secret_access_key=self.secret_key,
                 config=BotoConfig(
                     signature_version='s3v4',
-                    region_name='ru-central1',
-                    s3={'addressing_style': 'virtual'}
+                    region_name='ru-central1'
                 ),
                 region_name='ru-central1'
             )
@@ -81,7 +81,7 @@ class YandexStorage:
             
             # Проверяем доступ к бакету
             self.s3.head_bucket(Bucket=self.bucket_name)
-            logger.info(f"✅ Доступ к бакету {self.bucket_name} подтвержден")
+            logger.info(f"✅ Бакет {self.bucket_name} существует и доступен для чтения")
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
@@ -104,14 +104,16 @@ class YandexStorage:
             logger.info(f"📤 Попытка загрузки файла: {file_name}")
             logger.info(f"📦 Размер файла: {len(file_bytes)} байт")
             
-            # Добавляем ContentDisposition для корректной загрузки
-            self.s3.put_object(
+            # Пробуем загрузить файл
+            response = self.s3.put_object(
                 Bucket=self.bucket_name,
                 Key=file_name,
                 Body=file_bytes,
                 ContentType=content_type,
                 ACL='public-read'
             )
+            
+            logger.info(f"✅ Ответ от Storage: {response}")
             
             url = f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
             logger.info(f"✅ Файл успешно загружен: {url}")
@@ -120,16 +122,17 @@ class YandexStorage:
         except ClientError as e:
             error_code = e.response['Error']['Code']
             error_msg = e.response['Error']['Message']
-            logger.error(f"❌ Ошибка {error_code}: {error_msg}")
+            logger.error(f"❌ Ошибка загрузки {error_code}: {error_msg}")
             
-            if error_code == 'SignatureDoesNotMatch':
-                logger.error("🔑 Проблема с подписью запроса")
-                logger.error("📋 Проверьте:")
-                logger.error("   1. Правильно ли указаны Access Key и Secret Key")
-                logger.error("   2. Совпадает ли регион (ru-central1)")
-                logger.error("   3. Нет ли опечаток в ключах")
-            elif error_code == 'AccessDenied':
-                logger.error("🔑 Проблема с правами доступа")
+            # Детальная диагностика
+            if error_code == 'AccessDenied':
+                logger.error("🔑 AccessDenied - ДЕТАЛЬНАЯ ПРОВЕРКА:")
+                logger.error("   1. В Яндекс.Облаке → Сервисные аккаунты → cvetnik-bot-sa")
+                logger.error("   2. Проверьте вкладку 'Роли' - должны быть: storage.uploader, storage.viewer")
+                logger.error("   3. Проверьте вкладку 'Статические ключи доступа' - ключ должен быть активен")
+                logger.error("   4. В бакете cvetnik-photos → вкладка 'Доступ' - добавьте сервисный аккаунт")
+            elif error_code == 'SignatureDoesNotMatch':
+                logger.error("🔑 Проблема с подписью - проверьте ключи доступа")
             return None
 
     def get_file_url(self, file_name: str) -> str:
