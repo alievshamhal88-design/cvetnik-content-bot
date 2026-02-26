@@ -6,9 +6,12 @@ import asyncio
 import uuid
 import threading
 import requests
+import os
+import boto3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from botocore.client import Config
 
 from config import Config
 from database import Database
@@ -61,7 +64,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list - список всех букетов\n"
         "/generate - сгенерировать описание для последнего букета\n"
         "/myid - показать ваш Telegram ID\n"
-        "/admin - проверить права администратора\n\n"
+        "/admin - проверить права администратора\n"
+        "/sync - синхронизировать фото из облака\n\n"
         "Просто отправь мне фото букета, и я сохраню его в облако!"
     )
     await update.message.reply_text(welcome_text)
@@ -76,7 +80,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list - список всех букетов\n"
         "/generate - сгенерировать описание для последнего букета\n"
         "/myid - показать ваш Telegram ID\n"
-        "/admin - проверить права администратора\n\n"
+        "/admin - проверить права администратора\n"
+        "/sync - синхронизировать фото из облака\n\n"
         "📸 *Работа с фото:*\n"
         "Отправьте фото букета - оно сохранится в Яндекс.Облако\n"
         "После сохранения можно сгенерировать описание через YandexGPT"
@@ -93,6 +98,59 @@ async def show_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Статус: {is_admin_status}",
         parse_mode='Markdown'
     )
+
+# Команда синхронизации фото из облака
+async def sync_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Синхронизирует фото из облака с базой данных"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав")
+        return
+    
+    status_msg = await update.message.reply_text("⏳ Синхронизирую фото из облака...")
+    
+    try:
+        # Подключаемся к облаку
+        s3 = boto3.client(
+            's3',
+            endpoint_url='https://storage.yandexcloud.net',
+            aws_access_key_id=Config.YC_ACCESS_KEY,
+            aws_secret_access_key=Config.YC_SECRET_KEY,
+            config=Config(signature_version='s3v4'),
+            region_name='ru-central1'
+        )
+        
+        # Получаем список фото из папки bouquets/
+        response = s3.list_objects_v2(Bucket=Config.YC_BUCKET_NAME, Prefix='bouquets/')
+        
+        if 'Contents' not in response:
+            await status_msg.edit_text("📭 В облаке нет фото в папке bouquets/")
+            return
+        
+        count = 0
+        for obj in response['Contents']:
+            file_name = obj['Key']
+            photo_url = f"https://{Config.YC_BUCKET_NAME}.storage.yandexcloud.net/{file_name}"
+            
+            # Генерируем file_id из имени файла (убираем путь и расширение)
+            file_id = file_name.replace('bouquets/', '').replace('.jpg', '')
+            
+            # Добавляем в базу
+            success = db.add_bouquet_url(file_id, photo_url, file_name)
+            if success:
+                count += 1
+                logger.info(f"✅ Добавлено: {file_name}")
+        
+        await status_msg.edit_text(
+            f"✅ Синхронизация завершена!\n"
+            f"📸 Добавлено фото: {count}\n"
+            f"📊 Всего в базе: {db.get_bouquets_count()}"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка синхронизации: {e}")
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
 
 # Обработчик фото
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,6 +363,7 @@ def main():
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("myid", show_my_id))
+    application.add_handler(CommandHandler("sync", sync_photos))  # Новая команда
     
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(button_callback))
