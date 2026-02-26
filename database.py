@@ -13,7 +13,6 @@ class Database:
         self.create_tables()
         
     def connect(self):
-        """Подключение к базе данных"""
         try:
             self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
             self.cursor = self.conn.cursor()
@@ -22,9 +21,7 @@ class Database:
             logger.error(f"❌ Ошибка подключения к БД: {e}")
     
     def create_tables(self):
-        """Создание таблиц"""
         try:
-            # Таблица для букетов
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS bouquets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +34,6 @@ class Database:
                 )
             ''')
             
-            # Таблица для истории генераций
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS generations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +52,6 @@ class Database:
             logger.error(f"❌ Ошибка создания таблиц: {e}")
     
     def add_bouquet(self, file_id, photo_url, file_name):
-        """Добавляет букет в базу"""
         try:
             self.cursor.execute(
                 'INSERT OR IGNORE INTO bouquets (file_id, photo_url, file_name) VALUES (?, ?, ?)',
@@ -69,7 +64,6 @@ class Database:
             return None
     
     def get_bouquet(self, bouquet_id):
-        """Получает букет по ID"""
         try:
             self.cursor.execute('SELECT * FROM bouquets WHERE id = ?', (bouquet_id,))
             row = self.cursor.fetchone()
@@ -89,7 +83,6 @@ class Database:
             return None
     
     def get_all_bouquets(self):
-        """Получает все букеты"""
         try:
             self.cursor.execute('SELECT id, photo_url, name, description FROM bouquets ORDER BY created_at DESC')
             rows = self.cursor.fetchall()
@@ -107,7 +100,6 @@ class Database:
             return []
     
     def update_description(self, bouquet_id, description):
-        """Обновляет описание букета"""
         try:
             self.cursor.execute(
                 'UPDATE bouquets SET description = ? WHERE id = ?',
@@ -120,7 +112,6 @@ class Database:
             return False
     
     def add_generation(self, bouquet_id, prompt, description, model="yandexgpt"):
-        """Сохраняет историю генерации"""
         try:
             self.cursor.execute(
                 'INSERT INTO generations (bouquet_id, prompt, description, model) VALUES (?, ?, ?, ?)',
@@ -133,7 +124,6 @@ class Database:
             return False
     
     def close(self):
-        """Закрытие соединения"""
         if self.conn:
             self.conn.close()
             logger.info("✅ Соединение с БД закрыто")
