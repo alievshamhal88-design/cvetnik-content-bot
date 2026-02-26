@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    # Telegram
+    # Telegram - ТОКЕН КОНТЕНТ БОТА
     BOT_TOKEN = "8378996136:AAFHQ-NPDbRVljd0Ap02IU9EdohY6Bma-O4"
     
     # Yandex GPT
