@@ -293,17 +293,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Главная функция"""
-    # Принудительный сброс перед запуском
     force_reset_bot()
-    
-    # Запускаем сервер для проверки здоровья
     start_health_server()
     logger.info("✅ Сервер здоровья запущен")
     
-    # Создаем приложение
     application = Application.builder().token(Config.BOT_TOKEN).build()
     
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("list", list_bouquets))
@@ -311,16 +306,10 @@ def main():
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("myid", show_my_id))
     
-    # Обработчик фото
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    # Обработчик callback-кнопок
     application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Обработчик ошибок
     application.add_error_handler(error_handler)
     
-    # Запускаем бота
     logger.info("🚀 Бот контента запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
