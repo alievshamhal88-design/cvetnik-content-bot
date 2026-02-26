@@ -1,83 +1,25 @@
-import sqlite3
-import os
-import logging
-from datetime import datetime
-
-logger = logging.getLogger(__name__)
-
-class Database:
-    def __init__(self, db_path='data/database.sqlite'):
-        # Создаем папку data, если её нет
-        os.makedirs('data/photos', exist_ok=True)
-        
-        self.conn = sqlite3.connect(db_path)
-        self.cursor = self.conn.cursor()
-        self._create_tables()
-    
-    def _create_tables(self):
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS photos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id TEXT UNIQUE,
-                file_path TEXT,
-                posted INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                posted_at TIMESTAMP
-            )
-        ''')
-        self.conn.commit()
-        logger.info("✅ Таблица photos создана или уже существует")
-    
-    def add_photo(self, file_id, file_path):
+    def add_bouquet_url(self, file_id: str, photo_url: str, file_name: str) -> bool:
+        """Добавляет букет в каталог с URL из облака"""
         try:
             self.cursor.execute(
-                'INSERT OR IGNORE INTO photos (file_id, file_path) VALUES (?, ?)',
-                (file_id, file_path)
+                'INSERT OR IGNORE INTO bouquets (photo_file_id, photo_url, file_name, name) VALUES (?, ?, ?, ?)',
+                (file_id, photo_url, file_name, "Букет")
             )
             self.conn.commit()
-            logger.info(f"✅ Фото {file_id} добавлено в базу")
             return True
         except Exception as e:
-            logger.error(f"❌ Ошибка добавления фото: {e}")
+            logger.error(f"Ошибка добавления букета: {e}")
             return False
-    
-    def get_random_unposted_photo(self):
-        self.cursor.execute(
-            'SELECT id, file_id, file_path FROM photos WHERE posted = 0 ORDER BY RANDOM() LIMIT 1'
-        )
+
+    def get_random_bouquet(self):
+        """Возвращает случайный букет с URL из облака"""
+        self.cursor.execute('SELECT id, name, description, photo_url FROM bouquets ORDER BY RANDOM() LIMIT 1')
         row = self.cursor.fetchone()
         if row:
-            return {'id': row[0], 'file_id': row[1], 'file_path': row[2]}
+            return {
+                'id': row[0],
+                'name': row[1],
+                'description': row[2],
+                'photo_url': row[3]  # теперь это URL, а не file_id
+            }
         return None
-    
-    def mark_as_posted(self, photo_id):
-        self.cursor.execute(
-            'UPDATE photos SET posted = 1, posted_at = CURRENT_TIMESTAMP WHERE id = ?',
-            (photo_id,)
-        )
-        self.conn.commit()
-        logger.info(f"✅ Фото {photo_id} отмечено как опубликованное")
-    
-    def get_stats(self):
-        self.cursor.execute('SELECT COUNT(*) FROM photos')
-        total = self.cursor.fetchone()[0]
-        
-        self.cursor.execute('SELECT COUNT(*) FROM photos WHERE posted = 1')
-        posted = self.cursor.fetchone()[0]
-        
-        pending = total - posted
-        
-        return {'total': total, 'posted': posted, 'pending': pending}
-    
-    def get_pending_count(self):
-        self.cursor.execute('SELECT COUNT(*) FROM photos WHERE posted = 0')
-        return self.cursor.fetchone()[0]
-    
-    def reset_all_photos(self):
-        """Сбрасывает статус всех фото (posted = 0) для нового круга публикаций"""
-        self.cursor.execute('UPDATE photos SET posted = 0')
-        self.conn.commit()
-        logger.info("🔄 Все фото сброшены для нового круга публикаций")
-    
-    def close(self):
-        self.conn.close()
