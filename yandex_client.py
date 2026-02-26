@@ -10,15 +10,12 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class YandexGPT:
-    """Клиент для YandexGPT"""
-    
     def __init__(self):
         self.folder_id = Config.YANDEX_FOLDER
         self.api_key = Config.YANDEX_API_KEY
         self.url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
     def generate_description(self, prompt: str) -> Optional[str]:
-        """Генерирует описание для букета"""
         try:
             headers = {
                 "Authorization": f"Api-Key {self.api_key}",
@@ -57,15 +54,12 @@ class YandexGPT:
 
 
 class YandexStorage:
-    """Клиент для Яндекс Object Storage"""
-    
     def __init__(self):
         self.access_key = Config.YC_ACCESS_KEY
         self.secret_key = Config.YC_SECRET_KEY
         self.bucket_name = Config.YC_BUCKET_NAME
         self.endpoint_url = "https://storage.yandexcloud.net"
         
-        # Создаем S3-клиент с исправленным импортом BotoConfig
         self.s3 = boto3.client(
             's3',
             endpoint_url=self.endpoint_url,
@@ -77,7 +71,6 @@ class YandexStorage:
         logger.info(f"✅ Storage клиент инициализирован для бакета {self.bucket_name}")
 
     def upload_file(self, file_bytes: bytes, file_name: str = None, content_type: str = 'image/jpeg') -> Optional[str]:
-        """Загружает файл в облако и возвращает публичную ссылку"""
         try:
             if file_name is None:
                 file_name = f"bouquets/{uuid.uuid4()}.jpg"
@@ -99,5 +92,4 @@ class YandexStorage:
             return None
 
     def get_file_url(self, file_name: str) -> str:
-        """Возвращает публичную ссылку на файл"""
         return f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
