@@ -27,9 +27,9 @@ gpt = YandexGPT()
 # Временное хранилище для состояний
 user_data = {}
 
-# Проверка на администратора
+# Проверка на администратора (теперь поддерживает список)
 def is_admin(user_id):
-    return user_id == Config.ADMIN_ID
+    return user_id in Config.ADMIN_IDS
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,6 +61,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "После сохранения можно сгенерировать описание через YandexGPT"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
+
+# Команда для проверки своего ID
+async def show_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает ваш Telegram ID"""
+    user_id = update.effective_user.id
+    is_admin_status = "✅ Администратор" if is_admin(user_id) else "❌ Не администратор"
+    await update.message.reply_text(
+        f"Ваш Telegram ID: `{user_id}`\n"
+        f"Статус: {is_admin_status}",
+        parse_mode='Markdown'
+    )
 
 # Обработчик фото
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -290,6 +301,7 @@ def main():
     application.add_handler(CommandHandler("list", list_bouquets))
     application.add_handler(CommandHandler("generate", generate_command))
     application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CommandHandler("myid", show_my_id))  # новая команда
     
     # Обработчик фото
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
