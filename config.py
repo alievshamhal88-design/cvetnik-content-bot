@@ -16,8 +16,8 @@ class Config:
     YC_SECRET_KEY = "YCNGUXScykRhi4_znH2B0PzmnvgWj7sfS73SLTYX"
     YC_BUCKET_NAME = "cvetnik-photos"
     
-    # Admin - два админа (ЗАМЕНИТЕ 123456789 НА РЕАЛЬНЫЙ ID)
-    ADMIN_IDS = [8378996136, 123456789]
+    # Admin - два админа (ваш ID и второй админ)
+    ADMIN_IDS = [7750251679, 123456789]  # 7750251679 - это вы, 123456789 - замените на ID второго админа
     
     # Канал для проверки подписки
     CHANNEL_ID = "@cvetnik_nsk"
