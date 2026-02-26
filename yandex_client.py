@@ -60,20 +60,45 @@ class YandexStorage:
         self.bucket_name = Config.YC_BUCKET_NAME
         self.endpoint_url = "https://storage.yandexcloud.net"
         
-        self.s3 = boto3.client(
-            's3',
-            endpoint_url=self.endpoint_url,
-            aws_access_key_id=self.access_key,
-            aws_secret_access_key=self.secret_key,
-            config=BotoConfig(signature_version='s3v4'),
-            region_name='ru-central1'
-        )
-        logger.info(f"✅ Storage клиент инициализирован для бакета {self.bucket_name}")
+        logger.info(f"🔑 Access Key (первые 10 символов): {self.access_key[:10]}...")
+        logger.info(f"🔐 Secret Key (первые 5 символов): {self.secret_key[:5]}...")
+        logger.info(f"📦 Bucket: {self.bucket_name}")
+        
+        try:
+            self.s3 = boto3.client(
+                's3',
+                endpoint_url=self.endpoint_url,
+                aws_access_key_id=self.access_key,
+                aws_secret_access_key=self.secret_key,
+                config=BotoConfig(signature_version='s3v4'),
+                region_name='ru-central1'
+            )
+            logger.info("✅ Storage клиент создан")
+            
+            # Проверяем доступ к бакету
+            self.s3.head_bucket(Bucket=self.bucket_name)
+            logger.info(f"✅ Доступ к бакету {self.bucket_name} подтвержден")
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            logger.error(f"❌ Ошибка доступа к бакету: {error_code}")
+            if error_code == '403':
+                logger.error("🚫 Нет доступа к бакету. Проверьте права сервисного аккаунта.")
+            elif error_code == '404':
+                logger.error("❓ Бакет не найден. Проверьте имя бакета.")
+            self.s3 = None
 
     def upload_file(self, file_bytes: bytes, file_name: str = None, content_type: str = 'image/jpeg') -> Optional[str]:
+        if self.s3 is None:
+            logger.error("❌ Storage клиент не инициализирован")
+            return None
+            
         try:
             if file_name is None:
                 file_name = f"bouquets/{uuid.uuid4()}.jpg"
+            
+            logger.info(f"📤 Попытка загрузки файла: {file_name}")
+            logger.info(f"📦 Размер файла: {len(file_bytes)} байт")
             
             self.s3.put_object(
                 Bucket=self.bucket_name,
@@ -84,11 +109,22 @@ class YandexStorage:
             )
             
             url = f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
-            logger.info(f"✅ Файл загружен: {url}")
+            logger.info(f"✅ Файл успешно загружен: {url}")
             return url
             
         except ClientError as e:
-            logger.error(f"❌ Ошибка загрузки в облако: {e}")
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error']['Message']
+            logger.error(f"❌ Ошибка {error_code}: {error_msg}")
+            
+            if error_code == 'AccessDenied':
+                logger.error("🔑 Проблема с правами доступа")
+                logger.error("📋 Проверьте:")
+                logger.error("   1. Что ключи доступа правильные")
+                logger.error("   2. Что у сервисного аккаунта есть роль storage.uploader")
+                logger.error("   3. Что бакет существует и доступен")
+            elif error_code == 'NoSuchBucket':
+                logger.error(f"❓ Бакет {self.bucket_name} не существует")
             return None
 
     def get_file_url(self, file_name: str) -> str:
