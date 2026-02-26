@@ -1,17 +1,21 @@
 import os
+from dotenv import load_dotenv
 
-# ID администраторов
-ADMIN_IDS = [
-    7651760894,  # @cvetnik1_sib
-    7750251679,  # @Alan_Aliev
-]
+load_dotenv()
 
-# Время публикации по Новосибирску (UTC+7)
-POST_TIMES = [
-    "09:00",  # Утро
-    "18:00",  # Вечер
-]
-
-# Настройки Yandex Cloud
-YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+class Config:
+    # Telegram
+    BOT_TOKEN = "8378996136:AAFhQ-NPDbRV1jd0Ap02IU9EdoHX6Bma-04"
+    
+    # Yandex GPT
+    YANDEX_FOLDER = "b1gag20fr95ujgos7fv9"
+    YANDEX_API_KEY = "AQVnwBeEGS67ZahXn1qrJnKnagKMhZXt8Zqv1a5"
+    
+    # Yandex Storage
+    YC_ACCESS_KEY = "YCAJE1B_EbVzadJJhjffGVMgo"
+    YC_SECRET_KEY = "YCNGUXScykRhi4_znH2B0PzmnvgWj7sfS73SLTYX"
+    YC_BUCKET_NAME = "cvetnik-photos"
+    
+    # Admin
+    ADMIN_ID = 8378996136
+    CHANNEL_ID = "@cvetnik_nsk"
