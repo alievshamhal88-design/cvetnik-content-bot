@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    # Telegram - ТОКЕН КОНТЕНТ БОТА
-    BOT_TOKEN = "8378996136:AAFHQ-NPDbRVljd0Ap02IU9EdohY6Bma-O4"  # Убедитесь, что это точно тот токен
+    # Telegram - НОВЫЙ ТОКЕН для @content_cvetnik_bot
+    BOT_TOKEN = "8736488668:AAEsz_Ws3iYMOR8odf7-k-jTE_ctuClgJVE"
     
     # Yandex GPT
     YANDEX_FOLDER = "b1gag20fr95ujgos7fv9"
@@ -16,8 +16,8 @@ class Config:
     YC_SECRET_KEY = "YCNGUXScykRhi4_znH2B0PzmnvgWj7sfS73SLTYX"
     YC_BUCKET_NAME = "cvetnik-photos"
     
-    # Admin - два админа
-    ADMIN_IDS = [8378996136, 123456789]  # замените 123456789 на реальный ID второго админа
+    # Admin - два админа (ЗАМЕНИТЕ 123456789 НА РЕАЛЬНЫЙ ID)
+    ADMIN_IDS = [8378996136, 123456789]
     
     # Канал для проверки подписки
     CHANNEL_ID = "@cvetnik_nsk"
