@@ -5,7 +5,7 @@ load_dotenv()
 
 class Config:
     # Telegram
-    BOT_TOKEN = "8378996136:AAFhQ-NPDbRV1jd0Ap02IU9EdoHX6Bma-04"
+    BOT_TOKEN = "8378996136:AAFHQ-NPDbRVljd0Ap02IU9EdohY6Bma-O4"  # ← Новый токен
     
     # Yandex GPT
     YANDEX_FOLDER = "b1gag20fr95ujgos7fv9"
