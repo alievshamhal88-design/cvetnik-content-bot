@@ -1,94 +1,103 @@
 import requests
 import logging
-import os
-import random
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
+from typing import Optional
+import uuid
+from config import Config
 
 logger = logging.getLogger(__name__)
 
-class YandexGPTClient:
-    def __init__(self):
-        self.folder_id = os.getenv("YANDEX_FOLDER_ID")
-        self.api_key = os.getenv("YANDEX_API_KEY")
-        self.api_url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-        
-        if not self.folder_id or not self.api_key:
-            raise ValueError("❌ Отсутствуют YANDEX_FOLDER_ID или YANDEX_API_KEY")
-        
-        logger.info("✅ YandexGPT клиент инициализирован для постера")
-
-    def generate_post_text(self) -> str:
-        """
-        Генерирует текст для поста в канал
-        Возвращает строку с названием и описанием букета
-        """
-        prompts = [
-            "Придумай красивый пост для цветочного магазина. "
-            "Напиши название букета (2-4 слова) и короткое описание (1-2 предложения). "
-            "Формат: Название: ...\nОписание: ...",
-            
-            "Придумай романтический пост о букете цветов. "
-            "Название должно быть поэтичным, описание — тёплым. "
-            "Формат: Название: ...\nОписание: ...",
-            
-            "Придумай весенний пост о букете. Нежные, вдохновляющие слова. "
-            "Формат: Название: ...\nОписание: ..."
-        ]
-        
-        prompt = random.choice(prompts)
-        
-        headers = {
-            "Authorization": f"Api-Key {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "modelUri": f"gpt://{self.folder_id}/yandexgpt-lite",
-            "completionOptions": {
-                "stream": False,
-                "temperature": 0.8,
-                "maxTokens": "200"
-            },
-            "messages": [
-                {
-                    "role": "user",
-                    "text": prompt
-                }
-            ]
-        }
-        
-        try:
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                text = result['result']['alternatives'][0]['message']['text']
-                
-                # Парсим название и описание
-                lines = text.split('\n')
-                name = "Волшебный букет"
-                description = "Нежный букет для особенного случая."
-                
-                for line in lines:
-                    if 'Название:' in line:
-                        name = line.replace('Название:', '').strip()
-                    elif 'Описание:' in line:
-                        description = line.replace('Описание:', '').strip()
-                
-                # Формируем полный текст поста
-                return f"🌸 **{name}** 🌸\n\n{description}"
-            else:
-                logger.error(f"❌ Ошибка YandexGPT: {response.status_code}")
-                return self._get_fallback_text()
-                
-        except Exception as e:
-            logger.error(f"❌ Исключение: {e}")
-            return self._get_fallback_text()
+class YandexGPT:
+    """Клиент для YandexGPT"""
     
-    def _get_fallback_text(self) -> str:
-        """Запасной текст на случай ошибки"""
-        fallback = [
-            "🌸 **Нежность утра** 🌸\n\nНежный букет для особенного случая.",
-            "🌸 **Цветочная симфония** 🌸\n\nЯркий букет, который подарит радость.",
-            "🌸 **Весеннее настроение** 🌸\n\nСвежий букет из лучших цветов."
-        ]
-        return random.choice(fallback)
+    def __init__(self):
+        self.folder_id = Config.YANDEX_FOLDER
+        self.api_key = Config.YANDEX_API_KEY
+        self.url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+        
+    def generate_description(self, prompt: str) -> Optional[str]:
+        """Генерирует описание для букета"""
+        try:
+            headers = {
+                "Authorization": f"Api-Key {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            data = {
+                "modelUri": f"gpt://{self.folder_id}/yandexgpt-lite",
+                "completionOptions": {
+                    "stream": False,
+                    "temperature": 0.6,
+                    "maxTokens": 200
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "text": "Ты - профессиональный флорист и копирайтер. Составляй красивые описания для букетов цветов."
+                    },
+                    {
+                        "role": "user",
+                        "text": prompt
+                    }
+                ]
+            }
+            
+            response = requests.post(self.url, headers=headers, json=data)
+            response.raise_for_status()
+            
+            result = response.json()
+            description = result['result']['alternatives'][0]['message']['text']
+            return description
+            
+        except Exception as e:
+            logger.error(f"Ошибка генерации описания: {e}")
+            return None
+
+
+class YandexStorage:
+    """Клиент для Яндекс Object Storage"""
+    
+    def __init__(self):
+        self.access_key = Config.YC_ACCESS_KEY
+        self.secret_key = Config.YC_SECRET_KEY
+        self.bucket_name = Config.YC_BUCKET_NAME
+        self.endpoint_url = "https://storage.yandexcloud.net"
+        
+        # Создаем S3-клиент
+        self.s3 = boto3.client(
+            's3',
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            config=Config(signature_version='s3v4'),
+            region_name='ru-central1'
+        )
+        logger.info(f"✅ Storage клиент инициализирован для бакета {self.bucket_name}")
+
+    def upload_file(self, file_bytes: bytes, file_name: str = None, content_type: str = 'image/jpeg') -> Optional[str]:
+        """Загружает файл в облако и возвращает публичную ссылку"""
+        try:
+            if file_name is None:
+                file_name = f"bouquets/{uuid.uuid4()}.jpg"
+            
+            self.s3.put_object(
+                Bucket=self.bucket_name,
+                Key=file_name,
+                Body=file_bytes,
+                ContentType=content_type,
+                ACL='public-read'
+            )
+            
+            url = f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
+            logger.info(f"✅ Файл загружен: {url}")
+            return url
+            
+        except ClientError as e:
+            logger.error(f"❌ Ошибка загрузки в облако: {e}")
+            return None
+
+    def get_file_url(self, file_name: str) -> str:
+        """Возвращает публичную ссылку на файл"""
+        return f"https://{self.bucket_name}.storage.yandexcloud.net/{file_name}"
